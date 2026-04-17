@@ -1,0 +1,47 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+  overflow: hidden;
+  transition:
+    background-color var(--motion-duration-normal) var(--motion-ease-standard),
+    color var(--motion-duration-normal) var(--motion-ease-standard);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+:focus-visible {
+  outline: var(--border-width-strong) solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
