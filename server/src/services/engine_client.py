@@ -42,6 +42,12 @@ if _lib is not None:
         POINTER(c_double), POINTER(c_double), POINTER(c_double),
     ]
     _lib.sf_delta_hedge_pnl_histogram.restype = None
+    _lib.sf_delta_hedge_strategy_compare.argtypes = [
+        c_double, c_double, c_double, c_double, c_double,
+        c_int, c_int, c_double, c_double, c_double,
+        POINTER(c_double),
+    ]
+    _lib.sf_delta_hedge_strategy_compare.restype = None
     _lib.sf_pde_price.argtypes            = [c_double, c_double, c_double, c_double, c_double,
                                               c_double, c_int, c_int, c_int]
     _lib.sf_pde_price.restype             = c_double
@@ -324,6 +330,44 @@ def delta_hedge_pnl_distribution(
             "counts": [float(counts_buf[i]) for i in range(n_bins)],
         },
     }
+
+
+def delta_hedge_strategy_compare(
+    spot: float, strike: float, rate: float, vol: float, maturity: float,
+    n_rebalances: int, n_paths: int,
+    transaction_cost_bps: float = 5.0,
+    rebalance_threshold: float = 0.02,
+    vol_mismatch_mult: float = 1.15,
+) -> dict:
+    labels = ["discrete_delta", "with_transaction_cost", "threshold_rebalance", "vol_mismatch"]
+    if _lib is None:
+        base = {
+            "mean": 0.0, "std": 0.0, "q05": 0.0, "q50": 0.0, "q95": 0.0,
+            "turnover": 0.0, "transaction_cost": 0.0, "var95": 0.0, "es95": 0.0,
+        }
+        return {k: dict(base) for k in labels}
+    out = (c_double * 36)()
+    _lib.sf_delta_hedge_strategy_compare(
+        spot, strike, rate, vol, maturity,
+        int(n_rebalances), int(n_paths),
+        float(transaction_cost_bps), float(rebalance_threshold), float(vol_mismatch_mult),
+        out,
+    )
+    result: dict[str, dict] = {}
+    for i, key in enumerate(labels):
+        off = i * 9
+        result[key] = {
+            "mean": float(out[off + 0]),
+            "std": float(out[off + 1]),
+            "q05": float(out[off + 2]),
+            "q50": float(out[off + 3]),
+            "q95": float(out[off + 4]),
+            "turnover": float(out[off + 5]),
+            "transaction_cost": float(out[off + 6]),
+            "var95": float(out[off + 7]),
+            "es95": float(out[off + 8]),
+        }
+    return result
 
 
 def run_convergence_steps(

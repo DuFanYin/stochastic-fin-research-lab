@@ -15,5 +15,13 @@ void delta_hedge_pnl_histogram(
     double* out_edges,
     double* out_counts
 );
+void delta_hedge_strategy_compare(
+    double spot, double strike, double rate, double vol, double maturity,
+    int n_rebalances, int n_paths,
+    double transaction_cost_bps,
+    double rebalance_threshold,
+    double vol_mismatch_mult,
+    double* out_stats_36
+);
 
 }  // namespace sf

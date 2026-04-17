@@ -115,6 +115,9 @@ export const content = `
         <div class="param-group-label">Hedging</div>
         <div class="field"><label title="Rebalances">Rebalances</label><input id="nReb" type="number" value="52"></div>
         <div class="field"><label title="Simulation Paths">Sim Paths</label><input id="hedgePaths" type="number" value="2000"></div>
+        <div class="field"><label title="Transaction cost in basis points">TC (bps)</label><input id="hedgeTcBps" type="number" value="5" step="0.5"></div>
+        <div class="field"><label title="Only rebalance when |target delta - current delta| exceeds this">Threshold</label><input id="hedgeThreshold" type="number" value="0.02" step="0.005"></div>
+        <div class="field param-full"><label title="Hedging model volatility multiplier">Vol mismatch x</label><input id="hedgeVolMismatchMult" type="number" value="1.15" step="0.05"></div>
 
         <div class="param-group-label">PDE</div>
         <div class="field"><label>S steps</label><input id="pdeSSteps" type="number" value="160"></div>

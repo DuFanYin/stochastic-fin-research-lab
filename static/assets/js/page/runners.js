@@ -374,6 +374,9 @@ export async function runHedge(showResultCard) {
       ...basePayload(),
       n_rebalances: Number(document.getElementById("nReb").value),
       n_paths:      Number(document.getElementById("hedgePaths").value),
+      transaction_cost_bps: Number(document.getElementById("hedgeTcBps").value),
+      rebalance_threshold: Number(document.getElementById("hedgeThreshold").value),
+      vol_mismatch_mult: Number(document.getElementById("hedgeVolMismatchMult").value),
     });
     renderHedging("hedgeOut", data);
   } catch (err) { showError("hedgeOut", err); }

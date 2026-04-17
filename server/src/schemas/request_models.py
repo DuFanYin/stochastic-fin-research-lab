@@ -34,6 +34,9 @@ class HedgingRequest(BaseModel):
     maturity: float = Field(..., gt=0, le=100.0)
     n_rebalances: int = Field(52, ge=1, le=10_000)
     n_paths: int = Field(500, ge=50, le=200_000)
+    transaction_cost_bps: float = Field(5.0, ge=0.0, le=1000.0)
+    rebalance_threshold: float = Field(0.02, ge=0.0, le=1.0)
+    vol_mismatch_mult: float = Field(1.15, ge=0.1, le=5.0)
 
 
 class SimulationRequest(BaseModel):

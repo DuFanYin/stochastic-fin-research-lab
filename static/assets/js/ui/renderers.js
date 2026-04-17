@@ -126,6 +126,21 @@ export function renderHedging(elId, data) {
   if (!data) return setHtml(elId, statusError("No response"));
   const s    = data.result_summary || {};
   const hist = data.result_details?.histogram || {};
+  const strategyCompare = data.result_details?.strategy_compare || {};
+  const compareConfig = data.result_details?.compare_config || {};
+  const bestStrategy = data.result_details?.best_strategy || {};
+  const strategyRows = Object.entries(strategyCompare).map(([name, stats]) => ({
+    strategy: name,
+    mean: stats?.mean,
+    std: stats?.std,
+    q05: stats?.q05,
+    q50: stats?.q50,
+    q95: stats?.q95,
+    var95: stats?.var95,
+    es95: stats?.es95,
+    turnover: stats?.turnover,
+    transaction_cost: stats?.transaction_cost,
+  }));
   setDiagBadge("diagHedge", data.diagnostics);
   setHtml(elId, resultWrap(`
     ${metricsRow([
@@ -155,6 +170,22 @@ export function renderHedging(elId, data) {
       Delta-hedge P&amp;L across ${s.n_paths ?? "?"} paths · ${s.n_rebalances ?? "?"} rebalances.
       Red bars = loss, green bars = gain. Dashed lines: q05 / median / q95.
     </div>
+    ${strategyRows.length ? `
+      ${sectionLabel("Strategy Compare")}
+      ${metricsRow([
+        ["TC (bps)", compareConfig.transaction_cost_bps],
+        ["Threshold", compareConfig.rebalance_threshold],
+        ["Vol mismatch x", compareConfig.vol_mismatch_mult],
+        ["Best strategy", bestStrategy.name],
+      ])}
+      ${metricsRow([
+        ["Best reason", bestStrategy.reason],
+        ["Best ES95", bestStrategy.es95],
+        ["Best Std", bestStrategy.std],
+        ["Best Mean", bestStrategy.mean],
+      ])}
+      ${tableHtml(strategyRows, ["strategy", "mean", "std", "q05", "q50", "q95", "var95", "es95", "turnover", "transaction_cost"])}
+    ` : ""}
   `));
 }
 

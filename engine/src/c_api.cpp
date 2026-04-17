@@ -55,6 +55,21 @@ void sf_delta_hedge_pnl_histogram(
     );
 }
 
+void sf_delta_hedge_strategy_compare(
+    double spot, double strike, double rate, double vol, double maturity,
+    int n_rebalances, int n_paths,
+    double transaction_cost_bps,
+    double rebalance_threshold,
+    double vol_mismatch_mult,
+    double* out_stats_36
+) {
+    sf::delta_hedge_strategy_compare(
+        spot, strike, rate, vol, maturity, n_rebalances, n_paths,
+        transaction_cost_bps, rebalance_threshold, vol_mismatch_mult,
+        out_stats_36
+    );
+}
+
 double sf_delta_hedge_error(int n_rebalances) {
     return sf::delta_hedge_error_estimate(n_rebalances);
 }
