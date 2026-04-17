@@ -7,7 +7,15 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from src.services.market_data import fetch_btc_snapshot, pick_rate
+from src.services.market_data import (
+    fetch_btc_snapshot,
+    pick_rate,
+    _fetch_btc_spot,
+    _fetch_btc_dvol,
+    _fetch_funding_rate,
+    _fetch_rate_curve,
+    fetch_iv_surface,
+)
 from src.services.engine_client import vol_surface_interp
 
 router = APIRouter(tags=["market"])
@@ -22,6 +30,49 @@ async def get_btc_snapshot() -> dict:
       spot, dvol, iv_surface, funding rate (→ mu), rate term structure.
     """
     return await fetch_btc_snapshot()
+
+
+# ── Sub-endpoints for progressive frontend display ────────────────────────────
+
+@router.get("/market/spot")
+async def get_spot() -> dict:
+    spot = await _fetch_btc_spot()
+    return {"spot": round(spot, 2)}
+
+
+@router.get("/market/dvol")
+async def get_dvol() -> dict:
+    dvol = await _fetch_btc_dvol()
+    return {"vol": round(dvol, 4), "vol_pct": round(dvol * 100, 2)}
+
+
+@router.get("/market/funding")
+async def get_funding() -> dict:
+    funding_ann = await _fetch_funding_rate()
+    return {
+        "mu": round(funding_ann, 4),
+        "mu_pct": round(funding_ann * 100, 3),
+        "funding_8h_pct": round((funding_ann / (3 * 365)) * 100, 4),
+    }
+
+
+@router.get("/market/rates")
+async def get_rates() -> dict:
+    curve = await _fetch_rate_curve()
+    _, rate_3m = pick_rate(curve, 0.25)
+    curve_pct = {k: round(v * 100, 3) for k, v in curve.items()}
+    return {
+        "rate": round(rate_3m, 4),
+        "rate_pct": round(rate_3m * 100, 3),
+        "rate_curve": curve,
+        "rate_curve_pct": curve_pct,
+    }
+
+
+@router.get("/market/surface")
+async def get_surface(spot: float) -> dict:
+    surface_data = await fetch_iv_surface(spot)
+    return {"iv_surface": surface_data["surface"]}
 
 
 # ── POST /market/resolve ──────────────────────────────────────────────────────
@@ -66,17 +117,18 @@ def resolve_params(req: ResolveRequest) -> ResolveResponse:
     """
     # ── Vol via C++ bilinear surface interpolation ────────────────────────────
     surface = [p.model_dump() for p in req.iv_surface]
-    iv = vol_surface_interp(
+    cpp_result = vol_surface_interp(
         surface       = surface,
         spot          = req.spot,
         target_strike = req.target_strike,
         target_expiry = req.target_maturity,
     )
 
-    if iv is not None:
-        # Find which surface point is nearest for provenance metadata
+    if cpp_result is not None:
+        iv, interp_method = cpp_result
+        # Find nearest surface point for provenance metadata
         import math
-        scale = req.target_strike
+        scale = req.target_strike if req.target_strike > 0 else 1.0
         best_pt = min(
             req.iv_surface,
             key=lambda p: math.hypot(
@@ -84,17 +136,16 @@ def resolve_params(req: ResolveRequest) -> ResolveResponse:
                 (p.years  - req.target_maturity),
             ),
         )
-        interp_method   = "cpp_bilinear" if iv != best_pt.iv else "py_nearest"
-        iv_instrument   = best_pt.instrument
-        iv_matched_k    = best_pt.strike
-        iv_matched_t    = best_pt.years
+        iv_instrument = best_pt.instrument
+        iv_matched_k  = best_pt.strike
+        iv_matched_t  = best_pt.years
     else:
         # No surface — caller should fall back to DVOL
-        iv              = 0.0
-        interp_method   = "dvol_fallback"
-        iv_instrument   = ""
-        iv_matched_k    = req.target_strike
-        iv_matched_t    = req.target_maturity
+        iv            = 0.0
+        interp_method = "dvol_fallback"
+        iv_instrument = ""
+        iv_matched_k  = req.target_strike
+        iv_matched_t  = req.target_maturity
 
     # ── Rate via Python linear interpolation on term structure ────────────────
     tenor_label, rate = pick_rate(req.rate_curve, req.target_maturity)

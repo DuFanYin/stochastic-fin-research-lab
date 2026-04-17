@@ -1,7 +1,14 @@
-import { renderShell, markRunStart, getDataMode } from "./core/shell.js";
-import { showErrorToast } from "./ui/core.js";
-import { initSelectButtons, initSwitchButtons } from "./ui/controls.js";
-import { content } from "./page/layout.js";
+import { markRunStart, getDataMode, showErrorToast, initShellControls } from "./ui/core.js";
+import {
+  initSelectButtons,
+  initSwitchButtons,
+  initModeSwitch,
+  initToggleButton,
+  initParamFlash,
+  initModeParamSections,
+  isPicked,
+  setActiveParamGroups,
+} from "./ui/controls.js";
 import {
   fetchLiveData,
   resolveFromSnapshot,
@@ -16,19 +23,13 @@ import {
   runValidationForCompute,
   runValidationOnly,
 } from "./page/runners.js";
-import {
-  initModeSwitch,
-  initToggleButton,
-  initParamFlash,
-  isPicked,
-  setActiveParamGroups,
-} from "./ui/interactions.js";
 
 /* ─── Bootstrap ──────────────────────────────────────────────────────────── */
 
-renderShell(content);
+initShellControls();
 initSelectButtons();
 initSwitchButtons();
+initModeParamSections();
 
 initModeSwitch(["pricingModeSingle", "pricingModeBatch"]);
 initModeSwitch(["measureModePQ", "measureModeRN"]);
@@ -127,61 +128,59 @@ async function runWithOptionalValidation(mainRun, targetCardId) {
   }
 }
 
+/* ─── Active mode tracking for the main Run button ──────────────────────── */
+
+let _activeModeBtnId = null;
+
+const MODE_RUN_MAP = {
+  runBtnPricing:    () => runWithOptionalValidation(runPricingMain,    "resultCardPricing"),
+  runBtnScenario:   () => runWithOptionalValidation(runScenario,       "resultCardScenario"),
+  runBtnHedge:      () => runWithOptionalValidation(runHedge,          "resultCardHedge"),
+  runBtnPde:        () => runWithOptionalValidation(runPde,            "resultCardPde"),
+  runBtnMeasure:    () => runWithOptionalValidation(runMeasureMain,    "resultCardMeasure"),
+  runBtnConvergence:() => runWithOptionalValidation(runConvergence,    "resultCardConvergence"),
+  runBtnBenchmark:  () => runWithOptionalValidation(runBenchmark,      "resultCardBenchmark"),
+  runBtnValidation: async () => {
+    markRunStart();
+    try {
+      if (getDataMode() === "live") await fetchLiveData().catch(() => {});
+      await runValidationOnly(showOnlyResultSection, isPicked);
+    } catch (err) { showErrorToast(err?.message ?? String(err), "Validation Failed"); }
+  },
+};
+
+document.getElementById("runBtnMain")?.addEventListener("click", () => {
+  if (_activeModeBtnId && MODE_RUN_MAP[_activeModeBtnId]) {
+    MODE_RUN_MAP[_activeModeBtnId]();
+  }
+});
+
 const RUN_MODE_BTN_IDS = [
   "runBtnPricing", "runBtnScenario", "runBtnHedge", "runBtnPde",
   "runBtnMeasure", "runBtnConvergence", "runBtnBenchmark", "runBtnValidation",
 ];
 
 function setActiveModeBtn(id) {
+  _activeModeBtnId = id;
   RUN_MODE_BTN_IDS.forEach((i) => document.getElementById(i)?.classList.remove("run-active"));
   document.getElementById(id)?.classList.add("run-active");
+  // Update Run button label to reflect active mode
 }
 
-document.getElementById("runBtnPricing")?.addEventListener("click", () => {
-  setActiveModeBtn("runBtnPricing");
-  runWithOptionalValidation(runPricingMain, "resultCardPricing");
-});
-document.getElementById("runBtnScenario")?.addEventListener("click", () => {
-  setActiveModeBtn("runBtnScenario");
-  runWithOptionalValidation(runScenario, "resultCardScenario");
-});
-document.getElementById("runBtnHedge")?.addEventListener("click", () => {
-  setActiveModeBtn("runBtnHedge");
-  runWithOptionalValidation(runHedge, "resultCardHedge");
-});
-document.getElementById("runBtnPde")?.addEventListener("click", () => {
-  setActiveModeBtn("runBtnPde");
-  runWithOptionalValidation(runPde, "resultCardPde");
-});
-document.getElementById("runBtnMeasure")?.addEventListener("click", () => {
-  setActiveModeBtn("runBtnMeasure");
-  runWithOptionalValidation(runMeasureMain, "resultCardMeasure");
-});
-document.getElementById("runBtnConvergence")?.addEventListener("click", () => {
-  setActiveModeBtn("runBtnConvergence");
-  runWithOptionalValidation(runConvergence, "resultCardConvergence");
-});
-document.getElementById("runBtnBenchmark")?.addEventListener("click", () => {
-  setActiveModeBtn("runBtnBenchmark");
-  runWithOptionalValidation(runBenchmark, "resultCardBenchmark");
-});
-document.getElementById("runBtnValidation")?.addEventListener("click", async () => {
-  setActiveModeBtn("runBtnValidation");
-  markRunStart();
-  try {
-    if (getDataMode() === "live") await fetchLiveData().catch(() => {});
-    await runValidationOnly(showOnlyResultSection, isPicked);
-  } catch (err) {
-    showErrorToast(err?.message ?? String(err), "Validation Failed");
-  }
-});
-
-/* ─── Active param group highlight ──────────────────────────────────────── */
+/* ─── Mode buttons: select only, no run ─────────────────────────────────── */
 
 RUN_MODE_BTN_IDS.forEach((id) => {
-  document.getElementById(id)?.addEventListener("click", () => setActiveParamGroups(id));
+  document.getElementById(id)?.addEventListener("click", () => {
+    setActiveModeBtn(id);
+    setActiveParamGroups(id);
+  });
 });
 
 /* ─── Param flash ────────────────────────────────────────────────────────── */
 
 initParamFlash();
+
+/* ─── Default active mode on load ───────────────────────────────────────── */
+
+setActiveModeBtn("runBtnPricing");
+setActiveParamGroups("runBtnPricing");

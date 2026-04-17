@@ -19,43 +19,6 @@
   grid-column: 1 / -1;
 }
 
-/* ─── Active param group (highlighted when a run button is selected) ─────────── */
-
-.param-group-label.param-active {
-  color: var(--color-brand-primary);
-  border-bottom-color: var(--color-brand-primary);
-}
-
-.field.param-active label {
-  color: var(--color-brand-primary);
-}
-
-.field.param-active input {
-  border-color: var(--color-brand-primary);
-  color: var(--text);
-}
-
-.field.param-active .select-btn {
-  border-color: var(--color-brand-primary);
-  color: var(--color-brand-primary);
-}
-
-.field.param-active .select-btn.active {
-  background: var(--color-brand-subtle);
-  border-color: var(--color-brand-primary);
-  color: var(--color-brand-primary);
-}
-
-.field.param-active .switch-btn {
-  border-color: var(--color-brand-primary);
-  color: var(--color-brand-primary);
-}
-
-.field.param-active .switch-btn[data-value="true"] {
-  background: var(--color-brand-subtle);
-  border-color: var(--color-brand-primary);
-  color: var(--color-brand-primary);
-}
 
 /* ─── Param grid label overrides ─────────────────────────────────────────────── */
 /* .field label base is in form-controls.css (72px). Override for tighter grid. */
@@ -215,3 +178,31 @@
     grid-column: span 1;
   }
 }
+
+/* ── Mode-param sections: JS toggles display none / contents ── */
+/* "contents" makes the div transparent to grid so children slot in directly */
+.mode-params {
+  display: none;
+}
+
+/* ── Main Run button (sits below mode section in col 2) ── */
+.run-btn-main {
+  margin-top: var(--space-3);
+  width: 100%;
+  padding: 0;
+  height: var(--ctrl-height);
+  line-height: var(--ctrl-height);
+  background: var(--color-brand-primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: opacity var(--motion-duration-fast) var(--motion-ease-standard);
+}
+
+.run-btn-main:hover { opacity: 0.85; }
+.run-btn-main:disabled { opacity: 0.4; cursor: not-allowed; }

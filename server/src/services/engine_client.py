@@ -1,4 +1,5 @@
-from ctypes import CDLL, POINTER, byref, c_double, c_int
+import json
+from ctypes import CDLL, POINTER, byref, c_char, c_char_p, c_double, c_int, create_string_buffer
 from pathlib import Path
 
 # ── Library loading ──────────────────────────────────────────────────────────
@@ -16,102 +17,30 @@ def _load_lib() -> CDLL | None:
 _lib = _load_lib()
 
 if _lib is not None:
-    # scalar returns
-    _lib.sf_mc_price_full.argtypes        = [c_double, c_double, c_double, c_double, c_double, c_int]
-    _lib.sf_mc_price_full.restype         = c_double
-    _lib.sf_mc_price_with_stderr.argtypes = [c_double, c_double, c_double, c_double, c_double, c_int, POINTER(c_double)]
-    _lib.sf_mc_price_with_stderr.restype  = c_double
-    _lib.sf_bs_price.argtypes             = [c_double, c_double, c_double, c_double, c_double]
-    _lib.sf_bs_price.restype              = c_double
-    _lib.sf_binomial_price.argtypes            = [c_double, c_double, c_double, c_double, c_double, c_int]
-    _lib.sf_binomial_price.restype             = c_double
-    _lib.sf_binomial_american_price.argtypes   = [c_double, c_double, c_double, c_double, c_double, c_int, c_double]
-    _lib.sf_binomial_american_price.restype    = c_double
-    _lib.sf_digital_call_bs.argtypes           = [c_double, c_double, c_double, c_double, c_double, c_double]
-    _lib.sf_digital_call_bs.restype            = c_double
-    _lib.sf_delta_hedge_pnl_std.argtypes       = [c_double, c_double, c_double, c_int]
-    _lib.sf_delta_hedge_pnl_std.restype        = c_double
-    _lib.sf_delta_hedge_pnl_distribution.argtypes = [
-        c_double, c_double, c_double, c_double, c_double,
-        c_int, c_int, POINTER(c_double),
-    ]
-    _lib.sf_delta_hedge_pnl_distribution.restype = None
-    _lib.sf_delta_hedge_pnl_histogram.argtypes = [
-        c_double, c_double, c_double, c_double, c_double,
-        c_int, c_int, c_int,
-        POINTER(c_double), POINTER(c_double), POINTER(c_double),
-    ]
-    _lib.sf_delta_hedge_pnl_histogram.restype = None
-    _lib.sf_delta_hedge_strategy_compare.argtypes = [
-        c_double, c_double, c_double, c_double, c_double,
-        c_int, c_int, c_double, c_double, c_double,
-        POINTER(c_double),
-    ]
-    _lib.sf_delta_hedge_strategy_compare.restype = None
-    _lib.sf_pde_price.argtypes            = [c_double, c_double, c_double, c_double, c_double,
-                                              c_double, c_int, c_int, c_int]
-    _lib.sf_pde_price.restype             = c_double
-
-    # output-pointer functions
-    _lib.sf_pricing_greeks.argtypes = [
-        c_double, c_double, c_double, c_double, c_double,
-        POINTER(c_double), POINTER(c_double),
-    ]
-    _lib.sf_pricing_error_decomp.argtypes = [
-        c_double, c_double, c_double,
-        POINTER(c_double), POINTER(c_double),
-    ]
-    _lib.sf_scenario_bs5.argtypes = [
-        c_double, c_double, c_double, c_double, c_double, c_double,
-        POINTER(c_double),
-    ]
-    _lib.sf_stats_normal.argtypes = [
-        c_double, c_double, c_double, c_int,
-        POINTER(c_double), POINTER(c_double), POINTER(c_double),
-    ]
-    _lib.sf_ito_check.argtypes = [
-        c_int, c_double, c_double, c_int,
-        POINTER(c_double), POINTER(c_double),
-    ]
-    _lib.sf_measure_compare.argtypes = [
-        c_double, c_double, c_double, c_double, c_int, c_int, c_double,
-        POINTER(c_double), POINTER(c_double), c_int,
-    ]
-    _lib.sf_measure_compare.restype = c_int
-
-    # int-return path functions
-    _lib.sf_simulation_path.argtypes = [
-        c_int, c_int, c_double, c_double, c_double, c_double, c_double,
-        POINTER(c_double),
-    ]
-    _lib.sf_simulation_path.restype = c_int
-    _lib.sf_measure_density_path.argtypes = [
-        c_double, c_double, c_double, c_double, c_int, POINTER(c_double),
-    ]
-    _lib.sf_measure_density_path.restype = c_int
-
-    # vol surface interpolation
-    _lib.sf_vol_surface_interp.argtypes = [
-        POINTER(c_double), POINTER(c_double), POINTER(c_double),
-        c_int,
-        c_double, c_double, c_double,
-    ]
-    _lib.sf_vol_surface_interp.restype = c_double
-
-    # batch
-    _lib.sf_pricing_batch.argtypes = [
-        c_int,
-        POINTER(c_double), POINTER(c_double), POINTER(c_double),
-        POINTER(c_double), POINTER(c_double), POINTER(c_int),
-        POINTER(c_double),
-        POINTER(c_double), POINTER(c_double), POINTER(c_double),
-    ]
-    _lib.sf_pricing_batch.restype = None
-
-    # thread control
+    _TASK_TO_SYMBOL = {
+        "pricing": "sf_run_pricing_json",
+        "pricing_batch": "sf_run_pricing_batch_json",
+        "pricing_batch_grid": "sf_run_pricing_batch_grid_json",
+        "hedging": "sf_run_hedging_json",
+        "scenario": "sf_run_scenario_json",
+        "validation_gate": "sf_run_validation_json",
+        "simulation": "sf_run_simulation_json",
+        "stats": "sf_run_stats_json",
+        "ito_check": "sf_run_ito_json",
+        "measure_density": "sf_run_measure_density_json",
+        "measure_compare": "sf_run_measure_compare_json",
+        "pde": "sf_run_pde_json",
+        "vol_surface": "sf_run_vol_surface_json",
+    }
+    for _sym in _TASK_TO_SYMBOL.values():
+        fn = getattr(_lib, _sym)
+        fn.argtypes = [c_char_p, POINTER(c_char), c_int, POINTER(c_int)]
+        fn.restype = c_int
     _lib.sf_set_num_threads.argtypes = [c_int]
     _lib.sf_get_max_threads.argtypes = []
     _lib.sf_get_max_threads.restype  = c_int
+else:
+    _TASK_TO_SYMBOL = {}
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -133,28 +62,74 @@ def get_max_threads() -> int:
     return int(_lib.sf_get_max_threads())
 
 
+def run_engine_task(task_type: str, payload: dict) -> dict:
+    if _lib is None:
+        return {
+            "contract_version": "v1",
+            "trace_id": payload.get("trace_id", "router-fallback"),
+            "status": "error",
+            "decision": "block",
+            "result_summary": {},
+            "result_details": {},
+            "error": {"code": "engine_unavailable", "message": "C++ engine is unavailable"},
+        }
+    symbol = _TASK_TO_SYMBOL.get(task_type)
+    if symbol is None:
+        return {
+            "contract_version": "v1",
+            "trace_id": payload.get("trace_id", "router"),
+            "status": "error",
+            "decision": "block",
+            "result_summary": {},
+            "result_details": {},
+            "error": {"code": "unsupported_task_type", "message": f"unsupported task_type: {task_type}"},
+        }
+
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    cap = 1_000_000
+    buf = create_string_buffer(cap)
+    written = c_int(0)
+    rc = int(getattr(_lib, symbol)(c_char_p(raw), buf, cap, byref(written)))
+    if rc != 0:
+        return {
+            "contract_version": "v1",
+            "trace_id": payload.get("trace_id", "router"),
+            "status": "error",
+            "decision": "block",
+            "result_summary": {},
+            "result_details": {},
+            "error": {"code": f"engine_rc_{rc}", "message": f"{symbol} failed"},
+        }
+    return json.loads(buf.value.decode("utf-8", errors="replace"))
+
+
+# ── Domain helpers ────────────────────────────────────────────────────────────
+
 def pricing_bundle(
     spot: float, strike: float, rate: float, vol: float, maturity: float,
     n_paths: int, steps: int, dividend_yield: float,
 ) -> dict:
-    if _lib is None:
+    r = run_engine_task("pricing", {
+        "spot": spot, "strike": strike, "rate": rate, "vol": vol,
+        "maturity": maturity, "n_paths": n_paths, "dividend_yield": dividend_yield,
+    })
+    if r.get("status") == "error":
         intrinsic = max(spot - strike, 0.0)
         return {"mc": intrinsic, "bs": intrinsic, "binomial": intrinsic,
-                "delta_bs": 0.5, "vega_bs": 0.0, "mc_minus_bs": 0.0, "binomial_minus_bs": 0.0}
-    r = rate - dividend_yield
-    mc_stderr = c_double()
-    mc      = float(_lib.sf_mc_price_with_stderr(spot, strike, r, vol, maturity, n_paths, byref(mc_stderr)))
-    bs      = float(_lib.sf_bs_price(spot, strike, r, vol, maturity))
-    binomial = float(_lib.sf_binomial_price(spot, strike, r, vol, maturity, steps))
-    delta, vega = c_double(), c_double()
-    _lib.sf_pricing_greeks(spot, strike, r, vol, maturity, byref(delta), byref(vega))
-    mc_bs, bi_bs = c_double(), c_double()
-    _lib.sf_pricing_error_decomp(mc, bs, binomial, byref(mc_bs), byref(bi_bs))
+                "mc_std_err": 0.0, "delta_bs": 0.5, "vega_bs": 0.0,
+                "mc_minus_bs": 0.0, "binomial_minus_bs": 0.0}
+    s = r.get("result_summary", {})
+    greeks = s.get("greeks", {})
+    err    = s.get("error_decomposition", {})
     return {
-        "mc": mc, "bs": bs, "binomial": binomial,
-        "mc_std_err": float(mc_stderr.value),
-        "delta_bs": float(delta.value), "vega_bs": float(vega.value),
-        "mc_minus_bs": float(mc_bs.value), "binomial_minus_bs": float(bi_bs.value),
+        "mc":       s.get("mc",       0.0),
+        "bs":       s.get("bs",       0.0),
+        "binomial": s.get("binomial", 0.0),
+        "mc_std_err":         s.get("mc_std_err",      0.0),
+        "delta_bs":           greeks.get("delta_bs",   0.5),
+        "vega_bs":            greeks.get("vega_bs",    0.0),
+        "mc_minus_bs":        err.get("mc_minus_bs",   0.0),
+        "binomial_minus_bs":  err.get("binomial_minus_bs", 0.0),
     }
 
 
@@ -162,121 +137,121 @@ def pricing_batch(jobs: list[dict]) -> list[dict]:
     n = len(jobs)
     if n == 0:
         return []
-    if _lib is None:
+    payload: dict = {"n_jobs": n}
+    for i, job in enumerate(jobs):
+        payload[f"job_{i}_spot"]           = job["spot"]
+        payload[f"job_{i}_strike"]         = job["strike"]
+        payload[f"job_{i}_rate"]           = job["rate"]
+        payload[f"job_{i}_vol"]            = job["vol"]
+        payload[f"job_{i}_maturity"]       = job["maturity"]
+        payload[f"job_{i}_n_paths"]        = int(job.get("n_paths", 10000))
+        payload[f"job_{i}_dividend_yield"] = job.get("dividend_yield", 0.0)
+    r = run_engine_task("pricing_batch", payload)
+    if r.get("status") == "error":
         return [{"mc": max(j["spot"] - j["strike"], 0.0),
                  "bs": max(j["spot"] - j["strike"], 0.0),
                  "binomial": max(j["spot"] - j["strike"], 0.0)} for j in jobs]
-    spots      = (c_double * n)(*[j["spot"]           for j in jobs])
-    strikes    = (c_double * n)(*[j["strike"]         for j in jobs])
-    rates      = (c_double * n)(*[j["rate"]           for j in jobs])
-    vols       = (c_double * n)(*[j["vol"]            for j in jobs])
-    maturities = (c_double * n)(*[j["maturity"]       for j in jobs])
-    npaths     = (c_int    * n)(*[int(j["n_paths"])   for j in jobs])
-    divyields  = (c_double * n)(*[j["dividend_yield"] for j in jobs])
-    out_mc, out_bs, out_bin = (c_double * n)(), (c_double * n)(), (c_double * n)()
-    _lib.sf_pricing_batch(n, spots, strikes, rates, vols, maturities,
-                          npaths, divyields, out_mc, out_bs, out_bin)
-    return [{"mc": float(out_mc[i]), "bs": float(out_bs[i]), "binomial": float(out_bin[i])}
-            for i in range(n)]
+    rows = r.get("result_details", {}).get("flat_rows", [])
+    return [{"mc": row.get("mc", 0.0), "bs": row.get("bs", 0.0),
+             "binomial": row.get("binomial", 0.0)} for row in rows]
 
 
 def scenario_bs5(
     spot: float, strike: float, rate: float, vol: float,
     maturity: float, dividend_yield: float,
 ) -> list[float]:
-    if _lib is None:
+    r = run_engine_task("scenario", {
+        "spot": spot, "strike": strike, "rate": rate, "vol": vol,
+        "maturity": maturity, "dividend_yield": dividend_yield,
+    })
+    if r.get("status") == "error":
         return [max(spot - strike, 0.0)] * 5
-    out = (c_double * 5)()
-    _lib.sf_scenario_bs5(spot, strike, rate, vol, maturity, dividend_yield, out)
-    return [float(x) for x in out]
-
-
-def hedging_pnl_std(spot: float, vol: float, maturity: float, n_rebalances: int) -> float:
-    if _lib is None:
-        return (max(spot, 1.0) * max(vol, 0.01) * max(maturity, 1e-8) ** 0.5
-                / max(n_rebalances, 1) ** 0.5)
-    return float(_lib.sf_delta_hedge_pnl_std(spot, vol, maturity, n_rebalances))
+    rows = r.get("result_details", {}).get("rows", [])
+    return [row.get("bs_price", 0.0) for row in rows[:5]]
 
 
 def simulation_path(
     model: str, n_steps: int, dt: float,
     sigma: float, kappa: float, theta: float, x0: float,
 ) -> list[float]:
-    n = max(int(n_steps), 1)
-    if _lib is None:
-        return [x0] * (n + 1)
-    out = (c_double * (n + 1))()
-    length = int(_lib.sf_simulation_path(
-        1 if model == "vasicek" else 0, n, dt, sigma, kappa, theta, x0, out))
-    return [float(out[i]) for i in range(length)]
+    r = run_engine_task("simulation", {
+        "model": model, "n_steps": n_steps, "dt": dt,
+        "sigma": sigma, "kappa": kappa, "theta": theta, "x0": x0,
+    })
+    if r.get("status") == "error":
+        return [x0] * (max(int(n_steps), 1) + 1)
+    return r.get("result_details", {}).get("values", [x0])
 
 
 def stats_normal(mu: float, sigma: float, theta: float, sample_size: int) -> dict:
-    if _lib is None:
+    r = run_engine_task("stats", {
+        "mu": mu, "sigma": sigma, "theta": theta, "sample_size": sample_size,
+    })
+    if r.get("status") == "error":
+        import math
         s = max(sigma, 1e-8)
-        return {"mgf": (2.718281828459045 ** (mu * theta + 0.5 * s * s * theta * theta)),
+        return {"mgf": math.exp(mu * theta + 0.5 * s * s * theta * theta),
                 "mean": mu, "variance": s * s}
-    mgf, mean, var = c_double(), c_double(), c_double()
-    _lib.sf_stats_normal(mu, sigma, theta, int(sample_size), byref(mgf), byref(mean), byref(var))
-    return {"mgf": float(mgf.value), "mean": float(mean.value), "variance": float(var.value)}
+    s = r.get("result_summary", {})
+    return {"mgf": s.get("mgf", 0.0), "mean": s.get("mean", 0.0),
+            "variance": s.get("variance", 0.0)}
 
 
 def ito_check(function_type: str, theta: float, t: float, n_steps: int) -> dict:
-    if _lib is None:
+    r = run_engine_task("ito_check", {
+        "function_type": function_type, "theta": theta, "t": t, "n_steps": n_steps,
+    })
+    if r.get("status") == "error":
         return {"function_type": function_type, "value": 0.0,
                 "target_expectation": 1.0 if function_type == "exp_martingale" else 0.0}
-    code = {"w2_minus_t": 1, "w3": 2}.get(function_type, 0)
-    val, target = c_double(), c_double()
-    _lib.sf_ito_check(code, theta, t, int(n_steps), byref(val), byref(target))
-    return {"function_type": function_type,
-            "value": float(val.value), "target_expectation": float(target.value)}
+    s = r.get("result_summary", {})
+    return {"function_type": s.get("function_type", function_type),
+            "value": s.get("value", 0.0),
+            "target_expectation": s.get("target_expectation", 0.0)}
 
 
 def measure_density_path(mu: float, r: float, sigma: float, t: float, n_steps: int) -> list[float]:
-    n = max(int(n_steps), 20)
-    if _lib is None:
-        return [1.0] * (n + 1)
-    out = (c_double * (n + 1))()
-    length = int(_lib.sf_measure_density_path(mu, r, sigma, t, n, out))
-    return [float(out[i]) for i in range(length)]
+    result = run_engine_task("measure_density", {
+        "mu": mu, "r": r, "sigma": sigma, "t": t, "n_steps": n_steps,
+    })
+    if result.get("status") == "error":
+        return [1.0] * (max(int(n_steps), 20) + 1)
+    return result.get("result_details", {}).get("density", [1.0])
 
 
 def pde_price(
     spot: float, strike: float, rate: float, vol: float, maturity: float,
     dividend_yield: float, s_steps: int, t_steps: int, method: str,
 ) -> float:
-    if _lib is None:
+    r = run_engine_task("pde", {
+        "spot": spot, "strike": strike, "rate": rate, "vol": vol,
+        "maturity": maturity, "dividend_yield": dividend_yield,
+        "s_steps": int(s_steps), "t_steps": int(t_steps), "method": method,
+    })
+    if r.get("status") == "error":
         return max(spot - strike, 0.0)
-    return float(_lib.sf_pde_price(
-        spot, strike, rate, vol, maturity, dividend_yield,
-        int(s_steps), int(t_steps), 1 if method == "implicit" else 0,
-    ))
+    return r.get("result_summary", {}).get("price", max(spot - strike, 0.0))
 
 
 def measure_compare(
     mu: float, r: float, sigma: float, t: float,
     n_steps: int, n_paths: int, x0: float, preview_len: int = 50,
 ) -> dict:
-    if _lib is None:
-        dummy = {"mean": x0, "variance": 0.0, "q05": x0, "q50": x0, "q95": x0}
-        return {"p_stats": dummy, "q_stats": dummy,
+    result = run_engine_task("measure_compare", {
+        "mu": mu, "r": r, "sigma": sigma, "t": t,
+        "n_steps": n_steps, "n_paths": n_paths, "x0": x0,
+        "preview_len": preview_len,
+    })
+    dummy_stats = {"mean": x0, "variance": 0.0, "q05": x0, "q50": x0, "q95": x0}
+    if result.get("status") == "error":
+        return {"p_stats": dummy_stats, "q_stats": dummy_stats,
                 "path_preview": {"P": [x0] * preview_len, "Q": [x0] * preview_len}}
-    pl = max(1, min(int(preview_len), int(n_steps)))
-    stats_buf   = (c_double * 10)()
-    preview_buf = (c_double * (2 * pl))()
-    _lib.sf_measure_compare(mu, r, sigma, t, int(n_steps), int(n_paths), x0,
-                            stats_buf, preview_buf, pl)
-    def _s(off: int) -> dict:
-        return {"mean": float(stats_buf[off]),   "variance": float(stats_buf[off + 1]),
-                "q05":  float(stats_buf[off + 2]), "q50": float(stats_buf[off + 3]),
-                "q95":  float(stats_buf[off + 4])}
+    s  = result.get("result_summary", {})
+    rd = result.get("result_details", {})
     return {
-        "p_stats":      _s(0),
-        "q_stats":      _s(5),
-        "path_preview": {
-            "P": [float(preview_buf[i])      for i in range(pl)],
-            "Q": [float(preview_buf[pl + i]) for i in range(pl)],
-        },
+        "p_stats": s.get("p_stats", dummy_stats),
+        "q_stats": s.get("q_stats", dummy_stats),
+        "path_preview": rd.get("path_preview", {"P": [], "Q": []}),
     }
 
 
@@ -284,51 +259,57 @@ def digital_call_bs(
     spot: float, strike: float, rate: float, vol: float,
     maturity: float, dividend_yield: float,
 ) -> float:
-    if _lib is None:
-        from math import log, sqrt, exp, erf
+    r = run_engine_task("pricing", {
+        "spot": spot, "strike": strike, "rate": rate, "vol": vol,
+        "maturity": maturity, "dividend_yield": dividend_yield,
+        "product_type": "digital_call",
+    })
+    if r.get("status") == "error":
+        import math
         if spot <= 0 or strike <= 0 or maturity <= 0 or vol <= 0:
-            return exp(-rate * maturity) if spot > strike else 0.0
-        d2 = (log(spot / strike) + (rate - dividend_yield - 0.5 * vol * vol) * maturity) / (vol * sqrt(maturity))
-        return exp(-rate * maturity) * 0.5 * (1.0 + erf(d2 / sqrt(2.0)))
-    return float(_lib.sf_digital_call_bs(spot, strike, rate, vol, maturity, dividend_yield))
+            return math.exp(-rate * maturity) if spot > strike else 0.0
+        d2 = (math.log(spot / strike) + (rate - dividend_yield - 0.5 * vol * vol) * maturity) \
+             / (vol * math.sqrt(maturity))
+        return math.exp(-rate * maturity) * 0.5 * (1.0 + math.erf(d2 / math.sqrt(2.0)))
+    return r.get("result_summary", {}).get("bs", 0.0)
 
 
 def binomial_american(
-    spot: float, strike: float, rate: float, vol: float, maturity: float, steps: int,
-    dividend_yield: float = 0.0,
+    spot: float, strike: float, rate: float, vol: float, maturity: float,
+    steps: int, dividend_yield: float = 0.0,
 ) -> float:
-    if _lib is None:
+    r = run_engine_task("pricing", {
+        "spot": spot, "strike": strike, "rate": rate, "vol": vol,
+        "maturity": maturity, "dividend_yield": dividend_yield,
+        "is_american": True, "n_paths": 2000,
+    })
+    if r.get("status") == "error":
         return max(spot - strike, 0.0)
-    return float(_lib.sf_binomial_american_price(spot, strike, rate, vol, maturity, int(steps), dividend_yield))
+    s = r.get("result_summary", {})
+    return s.get("american") or s.get("binomial", max(spot - strike, 0.0))
 
 
 def delta_hedge_pnl_distribution(
     spot: float, strike: float, rate: float, vol: float, maturity: float,
-    n_rebalances: int, n_paths: int,
-    n_bins: int = 40,
+    n_rebalances: int, n_paths: int, n_bins: int = 40,
 ) -> dict:
-    if _lib is None:
+    r = run_engine_task("hedging", {
+        "spot": spot, "strike": strike, "rate": rate, "vol": vol,
+        "maturity": maturity, "n_rebalances": n_rebalances,
+        "n_paths": n_paths, "n_bins": n_bins,
+    })
+    if r.get("status") == "error":
         return {"mean": 0.0, "std": 0.0, "q05": 0.0, "q50": 0.0, "q95": 0.0,
                 "histogram": {"edges": [], "counts": []}}
-    n_bins = max(10, int(n_bins))
-    stats_buf  = (c_double * 5)()
-    edges_buf  = (c_double * (n_bins + 1))()
-    counts_buf = (c_double * n_bins)()
-    _lib.sf_delta_hedge_pnl_histogram(
-        spot, strike, rate, vol, maturity,
-        int(n_rebalances), int(n_paths), n_bins,
-        stats_buf, edges_buf, counts_buf,
-    )
+    s  = r.get("result_summary", {})
+    rd = r.get("result_details", {})
     return {
-        "mean": float(stats_buf[0]),
-        "std":  float(stats_buf[1]),
-        "q05":  float(stats_buf[2]),
-        "q50":  float(stats_buf[3]),
-        "q95":  float(stats_buf[4]),
-        "histogram": {
-            "edges":  [float(edges_buf[i]) for i in range(n_bins + 1)],
-            "counts": [float(counts_buf[i]) for i in range(n_bins)],
-        },
+        "mean": s.get("pnl_mean", 0.0),
+        "std":  s.get("pnl_std",  0.0),
+        "q05":  s.get("pnl_q05",  0.0),
+        "q50":  s.get("pnl_q50",  0.0),
+        "q95":  s.get("pnl_q95",  0.0),
+        "histogram": rd.get("histogram", {"edges": [], "counts": []}),
     }
 
 
@@ -340,34 +321,41 @@ def delta_hedge_strategy_compare(
     vol_mismatch_mult: float = 1.15,
 ) -> dict:
     labels = ["discrete_delta", "with_transaction_cost", "threshold_rebalance", "vol_mismatch"]
-    if _lib is None:
-        base = {
-            "mean": 0.0, "std": 0.0, "q05": 0.0, "q50": 0.0, "q95": 0.0,
-            "turnover": 0.0, "transaction_cost": 0.0, "var95": 0.0, "es95": 0.0,
-        }
+    r = run_engine_task("hedging", {
+        "spot": spot, "strike": strike, "rate": rate, "vol": vol,
+        "maturity": maturity, "n_rebalances": n_rebalances, "n_paths": n_paths,
+        "transaction_cost_bps": transaction_cost_bps,
+        "rebalance_threshold": rebalance_threshold,
+        "vol_mismatch_mult": vol_mismatch_mult,
+    })
+    base = {"mean": 0.0, "std": 0.0, "q05": 0.0, "q50": 0.0, "q95": 0.0,
+            "turnover": 0.0, "transaction_cost": 0.0, "var95": 0.0, "es95": 0.0}
+    if r.get("status") == "error":
         return {k: dict(base) for k in labels}
-    out = (c_double * 36)()
-    _lib.sf_delta_hedge_strategy_compare(
-        spot, strike, rate, vol, maturity,
-        int(n_rebalances), int(n_paths),
-        float(transaction_cost_bps), float(rebalance_threshold), float(vol_mismatch_mult),
-        out,
-    )
-    result: dict[str, dict] = {}
-    for i, key in enumerate(labels):
-        off = i * 9
-        result[key] = {
-            "mean": float(out[off + 0]),
-            "std": float(out[off + 1]),
-            "q05": float(out[off + 2]),
-            "q50": float(out[off + 3]),
-            "q95": float(out[off + 4]),
-            "turnover": float(out[off + 5]),
-            "transaction_cost": float(out[off + 6]),
-            "var95": float(out[off + 7]),
-            "es95": float(out[off + 8]),
-        }
-    return result
+    compare = r.get("result_details", {}).get("strategy_compare", {})
+    return {k: compare.get(k, dict(base)) for k in labels}
+
+
+def vol_surface_interp(
+    surface: list[dict], spot: float, target_strike: float, target_expiry: float,
+) -> tuple[float, str] | None:
+    """Returns (iv, method) or None if surface is empty."""
+    if not surface:
+        return None
+    r = run_engine_task("vol_surface", {
+        "spot":           spot,
+        "target_strike":  target_strike,
+        "target_expiry":  target_expiry,
+        "strikes":        [p["strike"] for p in surface],
+        "expiries":       [p["years"]  for p in surface],
+        "ivs":            [p["iv"]     for p in surface],
+    })
+    summary = r.get("result_summary", {})
+    iv = summary.get("iv")
+    method = summary.get("method", "cpp_bilinear")
+    if iv is None or iv <= 0:
+        return None
+    return float(iv), str(method)
 
 
 def run_convergence_steps(
@@ -375,13 +363,17 @@ def run_convergence_steps(
     maturity: float, dividend_yield: float,
     step_ladder: list[int],
 ) -> list[dict]:
-    """Run the binomial step-ladder convergence loop, returning one row per step count."""
     bs_ref = pricing_bundle(spot, strike, rate, vol, maturity, 5000, 200, dividend_yield)["bs"]
     rows = []
     prev_err = None
     for steps in step_ladder:
         st = max(2, int(steps))
-        binomial = pricing_bundle(spot, strike, rate, vol, maturity, 2000, st, dividend_yield)["binomial"]
+        r = run_engine_task("pricing", {
+            "spot": spot, "strike": strike, "rate": rate, "vol": vol,
+            "maturity": maturity, "dividend_yield": dividend_yield,
+            "n_paths": 2000, "n_steps": st,
+        })
+        binomial = r.get("result_summary", {}).get("binomial", 0.0)
         abs_err = abs(binomial - bs_ref)
         rel_err = abs_err / max(abs(bs_ref), 1e-10)
         rows.append({
@@ -391,42 +383,3 @@ def run_convergence_steps(
         })
         prev_err = abs_err
     return rows
-
-
-def vol_surface_interp(
-    surface: list[dict],   # list of {"strike", "years", "iv"} dicts
-    spot: float,
-    target_strike: float,
-    target_expiry: float,
-) -> float | None:
-    """
-    Bilinear interpolation in (log-moneyness, sqrt-time) space via C++.
-    Falls back to Python nearest-neighbour when the engine is unavailable.
-    Returns IV decimal, or None if surface is empty.
-    """
-    if not surface:
-        return None
-
-    n = len(surface)
-    strikes_arr  = (c_double * n)(*[p["strike"] for p in surface])
-    expiries_arr = (c_double * n)(*[p["years"]  for p in surface])
-    ivs_arr      = (c_double * n)(*[p["iv"]     for p in surface])
-
-    if _lib is not None:
-        result = float(_lib.sf_vol_surface_interp(
-            strikes_arr, expiries_arr, ivs_arr,
-            n, spot, target_strike, target_expiry,
-        ))
-        return result if result >= 0.0 else None
-
-    # Pure-Python nearest-neighbour fallback (no engine)
-    import math
-    scale = target_strike if target_strike > 0 else 1.0
-    best = min(
-        surface,
-        key=lambda p: math.hypot(
-            (p["strike"] - target_strike) / scale,
-            (p["years"]  - target_expiry),
-        ),
-    )
-    return best["iv"]

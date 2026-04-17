@@ -1,6 +1,5 @@
 """Validation / stochastic-calculus check routes: stats, Itô, simulation, measure."""
 
-from math import isfinite
 from time import perf_counter
 
 from fastapi import APIRouter
@@ -14,65 +13,18 @@ from src.schemas.request_models import (
     ValidationGateRequest,
 )
 from src.services.engine_client import (
-    delta_hedge_pnl_distribution,
     ito_check,
     measure_compare,
     measure_density_path,
-    pde_price,
-    pricing_batch,
-    pricing_bundle,
-    run_convergence_steps,
     simulation_path,
     stats_normal,
 )
 from src.services.analytics import (
-    build_batch_grid,
-    convergence_summary,
-    quantile,
-    stdev_population,
     summarize_density,
 )
-from src.services.validation_gate import (
-    evaluate_batch,
-    evaluate_convergence,
-    evaluate_hedging_normalized_std,
-    evaluate_ito,
-    evaluate_measure_compare,
-    evaluate_measure_density,
-    evaluate_pde_gap_abs,
-    evaluate_simulation_finite,
-    evaluate_stats,
-    summarize_gate,
-)
-from src.api.shared import _diag, _record
+from src.api.shared import _diag, _record, dispatch_task
 
 router = APIRouter(tags=["validation"])
-
-
-def _gate_batch_jobs(req: ValidationGateRequest) -> list[dict]:
-    """Build a spot/vol shock grid for the validation gate batch check."""
-    base = {
-        "spot": req.spot, "strike": req.strike, "rate": req.rate,
-        "vol": req.vol, "maturity": req.maturity, "n_paths": req.n_paths,
-        "product_type": "european_call", "dividend_yield": req.dividend_yield,
-        "fx_mode": False, "numeraire": "money_market", "is_american": False,
-    }
-    return build_batch_grid(base, max(1, int(req.batch_jobs)), float(req.batch_spot_shock))
-
-
-def _gate_convergence(req: ValidationGateRequest) -> dict:
-    """Run convergence loop for the gate, returning only the metrics needed by evaluators."""
-    rows = run_convergence_steps(
-        req.spot, req.strike, req.rate, req.vol,
-        req.maturity, req.dividend_yield, req.conv_steps,
-    )
-    summary, _ = convergence_summary(rows, rows[0]["bs_ref"] if rows else 0.0)
-    return {
-        "best_abs_error": summary["best_abs_error"],
-        "monotonicity_break_count": summary["monotonicity_break_count"],
-        "last_two_improvement_ratio": summary["last_two_improvement_ratio"],
-    }
-
 
 @router.post("/tool/stats/run")
 def tool_stats(req: StatsRequest) -> dict:
@@ -189,78 +141,4 @@ def tool_measure_compare(req: MeasureCompareRequest) -> dict:
 
 @router.post("/tool/validation/gate")
 def tool_validation_gate(req: ValidationGateRequest) -> dict:
-    t0 = perf_counter()
-    rows = []
-    capabilities = []
-
-    if req.pick_stats:
-        capabilities.append("stats_moment_check")
-        s = stats_normal(req.mu, req.vol, req.stats_theta, req.stats_n)
-        rows.extend(evaluate_stats(req.mu, req.vol, s["mean"], s["variance"]))
-
-        capabilities.append("measure_density_check")
-        density = measure_density_path(req.mu, req.rate, req.vol, req.maturity, req.measure_n)
-        density_summary = summarize_density(density, req.maturity)
-        rows.extend(evaluate_measure_density(density_summary))
-
-        capabilities.append("measure_compare_check")
-        cmp = measure_compare(req.mu, req.rate, max(req.vol, 1e-10), req.maturity, req.cmp_steps, req.cmp_paths, 1.0, preview_len=50)
-        var_gap = abs(cmp["p_stats"]["variance"] - cmp["q_stats"]["variance"])
-        p_disp = cmp["p_stats"]["q95"] - cmp["p_stats"]["q05"]
-        q_disp = cmp["q_stats"]["q95"] - cmp["q_stats"]["q05"]
-        disp_gap = abs(p_disp - q_disp)
-        rows.extend(evaluate_measure_compare(var_gap, disp_gap))
-
-    if req.pick_ito:
-        capabilities.append("ito_martingale_check")
-        it = ito_check(req.ito_function_type, req.ito_theta, req.ito_t, req.ito_n)
-        diff = abs(it["value"] - it["target_expectation"])
-        rows.append(evaluate_ito(diff, it["target_expectation"]))
-
-        capabilities.append("convergence_check")
-        conv = _gate_convergence(req)
-        best_err = float(conv["best_abs_error"])
-        break_cnt = float(conv["monotonicity_break_count"])
-        ratio = float(conv["last_two_improvement_ratio"]) if conv["last_two_improvement_ratio"] is not None else 999.0
-        rows.extend(evaluate_convergence(best_err, break_cnt, ratio))
-
-    if req.pick_simulation:
-        capabilities.append("simulation_stability_check")
-        values = simulation_path(req.model, req.sim_steps, req.sim_dt, req.vol, req.sim_kappa, req.sim_theta, 0.0)
-        finite = float(1 if values and isfinite(values[-1]) else 0)
-        rows.append(evaluate_simulation_finite(finite))
-
-        capabilities.append("pde_consistency_check")
-        method = req.pde_method.lower() if req.pde_method.lower() in {"implicit", "crank_nicolson"} else "crank_nicolson"
-        pde_px = pde_price(req.spot, req.strike, req.rate, req.vol, req.maturity, req.dividend_yield, req.pde_s_steps, req.pde_t_steps, method)
-        bs_ref = pricing_bundle(req.spot, req.strike, req.rate, req.vol, req.maturity, 8000, max(10, int(req.maturity * 250)), req.dividend_yield)["bs"]
-        pde_gap = abs(pde_px - bs_ref)
-        pde_tol = max(1e-3, 0.05 * max(abs(pde_px), 1.0))
-        rows.append(evaluate_pde_gap_abs(pde_gap, pde_tol))
-
-        capabilities.append("hedging_distribution_check")
-        hd = delta_hedge_pnl_distribution(req.spot, req.strike, req.rate, req.vol, req.maturity, req.n_rebalances, req.hedge_paths)
-        normalized_std = hd["std"] / max(req.spot, 1e-12)
-        rows.append(evaluate_hedging_normalized_std(normalized_std))
-
-        capabilities.append("batch_stability_check")
-        batch_outs = pricing_batch(_gate_batch_jobs(req))
-        spreads = [
-            max(out["mc"], out["bs"], out["binomial"]) - min(out["mc"], out["bs"], out["binomial"])
-            for out in batch_outs
-        ]
-        spread_mean = sum(spreads) / max(len(spreads), 1)
-        spread_std = stdev_population(spreads)
-        spread_cv = spread_std / max(abs(spread_mean), 1e-12)
-        p95 = quantile(sorted(spreads), 0.95)
-        rows.extend(evaluate_batch(spread_cv, p95))
-
-    summary = summarize_gate(rows, capabilities, req.compute_block_on_validation)
-    ms = (perf_counter() - t0) * 1000.0
-    return _record(
-        tool_name="validation_gate",
-        input_params=req.model_dump(),
-        result_summary=summary,
-        result_details={"rows": rows, "threshold_rows": rows},
-        diagnostics=_diag(ms, ["backend_gate_aggregated"]),
-    )
+    return dispatch_task(req.model_dump(), task_type="validation_gate", trace_prefix="validation")

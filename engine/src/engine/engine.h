@@ -1,0 +1,208 @@
+#pragma once
+
+#include "contracts/contracts.h"
+#include <string>
+#include <vector>
+
+namespace sf {
+
+// ── PricingEngine ─────────────────────────────────────────────────────────────
+
+struct PricingParams {
+    double spot          = 0.0;
+    double strike        = 0.0;
+    double rate          = 0.0;
+    double vol           = 0.0;
+    double maturity      = 0.0;
+    double dividend_yield = 0.0;
+    int    n_paths       = 10000;
+    int    n_steps       = 0;    // 0 = auto (maturity * 250)
+    bool   is_american   = false;
+    bool   fx_mode       = false;
+    std::string product_type = "european_call";
+    std::string numeraire    = "money_market";
+};
+
+struct BatchGridParams {
+    PricingParams base;
+    int    n_jobs     = 16;
+    double spot_shock = 0.02;
+};
+
+PricingResult      run_pricing(const PricingParams& p);
+PricingBatchResult run_pricing_batch(const std::vector<PricingParams>& jobs, double runtime_ms);
+PricingBatchResult run_pricing_batch_grid(const BatchGridParams& p, double runtime_ms);
+
+// ── ScenarioEngine ────────────────────────────────────────────────────────────
+
+struct ScenarioParams {
+    double spot           = 0.0;
+    double strike         = 0.0;
+    double rate           = 0.0;
+    double vol            = 0.0;
+    double maturity       = 0.0;
+    double dividend_yield = 0.0;
+};
+
+ScenarioResult run_scenario(const ScenarioParams& p);
+
+// ── HedgingEngine ─────────────────────────────────────────────────────────────
+
+struct HedgingParams {
+    double spot                  = 0.0;
+    double strike                = 0.0;
+    double rate                  = 0.0;
+    double vol                   = 0.0;
+    double maturity              = 0.0;
+    int    n_rebalances          = 52;
+    int    n_paths               = 2000;
+    int    n_bins                = 40;
+    double transaction_cost_bps  = 5.0;
+    double rebalance_threshold   = 0.02;
+    double vol_mismatch_mult     = 1.15;
+};
+
+HedgingResult run_hedging(const HedgingParams& p);
+
+// ── ValidationEngine ──────────────────────────────────────────────────────────
+
+struct ValidationParams {
+    double spot    = 0.0;
+    double strike  = 0.0;
+    double rate    = 0.0;
+    double vol     = 0.0;
+    double maturity = 0.0;
+    double mu      = 0.0;
+    bool   pick_stats      = false;
+    bool   pick_ito        = false;
+    bool   pick_simulation = false;
+    bool   block_mode      = false;
+    double stats_theta     = 1.0;
+    int    stats_n         = 10000;
+    double ito_theta       = 0.7;
+    double ito_t           = 1.0;
+    int    ito_n           = 2000;
+    std::string ito_function_type = "exp_martingale";
+    int    sim_steps       = 100;
+    int    n_rebalances    = 52;
+    int    hedge_paths     = 500;
+};
+
+ValidationResult run_validation(const ValidationParams& p);
+
+// ── UtilityEngine ─────────────────────────────────────────────────────────────
+
+struct SimulationParams {
+    std::string model = "gbm";
+    int    n_steps = 100;
+    double dt      = 0.01;
+    double sigma   = 0.2;
+    double kappa   = 1.2;
+    double theta   = 0.03;
+    double x0      = 1.0;
+};
+
+struct StatsParams {
+    double mu          = 0.0;
+    double sigma       = 1.0;
+    double theta       = 1.0;
+    int    sample_size = 10000;
+};
+
+struct ItoParams {
+    std::string function_type = "exp_martingale";
+    double theta  = 0.7;
+    double t      = 1.0;
+    int    n_steps = 2000;
+};
+
+struct MeasureDensityParams {
+    double mu      = 0.05;
+    double r       = 0.02;
+    double sigma   = 0.2;
+    double t       = 1.0;
+    int    n_steps = 100;
+};
+
+struct MeasureCompareParams {
+    double mu       = 0.05;
+    double r        = 0.02;
+    double sigma    = 0.2;
+    double t        = 1.0;
+    int    n_steps  = 100;
+    int    n_paths  = 1000;
+    double x0       = 1.0;
+    int    preview_len = 50;
+};
+
+struct PdeParams {
+    double spot           = 0.0;
+    double strike         = 0.0;
+    double rate           = 0.0;
+    double vol            = 0.0;
+    double maturity       = 1.0;
+    double dividend_yield = 0.0;
+    int    s_steps        = 100;
+    int    t_steps        = 100;
+    std::string method    = "crank_nicolson";
+};
+
+struct SimulationResult {
+    std::string     model;
+    int             n_steps = 0;
+    std::vector<double> values;
+};
+
+struct StatsResult {
+    double mgf      = 0.0;
+    double mean     = 0.0;
+    double variance = 0.0;
+};
+
+struct ItoResult {
+    std::string function_type;
+    double value  = 0.0;
+    double target = 0.0;
+};
+
+struct MeasureDensityResult {
+    std::vector<double> density;
+};
+
+struct MeasureCompareResult {
+    double p_mean = 0.0, p_var = 0.0, p_q05 = 0.0, p_q50 = 0.0, p_q95 = 0.0;
+    double q_mean = 0.0, q_var = 0.0, q_q05 = 0.0, q_q50 = 0.0, q_q95 = 0.0;
+    std::vector<double> preview_p;
+    std::vector<double> preview_q;
+};
+
+struct PdeResult {
+    double      price   = 0.0;
+    std::string method;
+    int         s_steps = 0;
+    int         t_steps = 0;
+};
+
+struct VolSurfaceParams {
+    std::vector<double> strikes;
+    std::vector<double> expiries;
+    std::vector<double> ivs;
+    double spot           = 0.0;
+    double target_strike  = 0.0;
+    double target_expiry  = 0.0;
+};
+
+struct VolSurfaceResult {
+    double iv            = 0.0;
+    std::string method;   // "cpp_bilinear" | "cpp_nearest"
+};
+
+SimulationResult     run_simulation      (const SimulationParams& p);
+StatsResult          run_stats           (const StatsParams& p);
+ItoResult            run_ito             (const ItoParams& p);
+MeasureDensityResult run_measure_density (const MeasureDensityParams& p);
+MeasureCompareResult run_measure_compare (const MeasureCompareParams& p);
+PdeResult            run_pde             (const PdeParams& p);
+VolSurfaceResult     run_vol_surface     (const VolSurfaceParams& p);
+
+}  // namespace sf

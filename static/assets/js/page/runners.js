@@ -5,10 +5,13 @@
    the transition between the two states.
 ────────────────────────────────────────────────────────────────────────────── */
 
-import { getJson, postJson } from "../core/api.js";
 import { getSelectButtonValue, getSwitchValue, setRunning } from "../ui/controls.js";
-import { getDataMode, setHtml, statusError, resultWrap, showErrorToast } from "../ui/core.js";
 import {
+  getDataMode,
+  setHtml,
+  statusError,
+  resultWrap,
+  showErrorToast,
   renderPricing,
   renderPricingBatch,
   renderScenario,
@@ -20,7 +23,42 @@ import {
   renderBenchmark,
   renderKv,
   renderValidation,
-} from "../ui/renderers.js";
+} from "../ui/core.js";
+
+const API_BASE = `${window.location.origin}/api`;
+
+async function readErrorDetail(res) {
+  try {
+    const data = await res.json();
+    if (typeof data?.detail === "string") return data.detail;
+    if (Array.isArray(data?.detail)) return JSON.stringify(data.detail);
+    return JSON.stringify(data);
+  } catch {
+    return "";
+  }
+}
+
+async function getJson(path) {
+  const res = await fetch(`${API_BASE}${path}`);
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    throw new Error(`GET ${path} failed: ${res.status}${detail ? ` - ${detail}` : ""}`);
+  }
+  return res.json();
+}
+
+async function postJson(path, payload) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    throw new Error(`POST ${path} failed: ${res.status}${detail ? ` - ${detail}` : ""}`);
+  }
+  return res.json();
+}
 
 /* ─── Live data fetch ─────────────────────────────────────────────────────── */
 
@@ -155,49 +193,100 @@ export function applyDataMode(mode) {
   }
 }
 
-/** Fetch BTC snapshot from backend and populate all live fields. */
+/** Fetch BTC market data concurrently; update UI as each source resolves. */
 export async function fetchLiveData() {
-  if (getDataMode() === "sim") return;   // Sim mode: skip network fetch entirely
-  setBanner("loading", "Fetching live market data…");
-  try {
-    const snap = await getJson("/market/btc");
-    _lastSnap = snap;
+  if (getDataMode() === "sim") return;
+  setBanner("loading", "Fetching…");
 
-    // ── Spot ──────────────────────────────────────────────────────────────────
-    setLiveField("spot", snap.spot);
+  // Shared mutable state assembled across concurrent callbacks
+  const snap = { rate_curve: {}, rate_curve_pct: {}, iv_surface: [] };
+  _lastSnap = snap;
 
-    // Sync strike to spot ATM if user hasn't touched it
-    const strikeEl = document.getElementById("strike");
-    if (strikeEl && !strikeEl.dataset.userEdited) {
-      strikeEl.value = snap.spot;
-    }
+  let spotResolved = null;
+  let volPct = null, ratePct = null, muPct = null;
+  let ts = new Date().toLocaleTimeString();
 
-    // ── mu — annualised funding rate ──────────────────────────────────────────
-    setLiveField("mu", snap.mu);
-    setInfoLine("fundingLine1", `8h rate  ${snap.funding_8h_pct}%  →  ${snap.mu_pct}% ann`);
+  function refreshBanner() {
+    setBanner("ok", {
+      spot: spotResolved != null ? `${spotResolved.toLocaleString()} USD` : "…",
+      iv:   volPct  != null ? `${volPct}%`       : "…",
+      r:    ratePct != null ? `${ratePct}%`       : "…",
+      mu:   muPct   != null ? `${muPct}% ann`     : "…",
+      ts,
+    });
+  }
+
+  const strikeEl = document.getElementById("strike");
+
+  // ── 1. Spot (needed first for ATM strike sync + surface fetch) ────────────
+  const spotPromise = getJson("/market/spot").then((d) => {
+    snap.spot = d.spot;
+    spotResolved = d.spot;
+    setLiveField("spot", d.spot);
+    if (strikeEl && !strikeEl.dataset.userEdited) strikeEl.value = d.spot;
+    refreshBanner();
+    return d.spot;
+  });
+
+  // ── 2. DVOL (independent) ─────────────────────────────────────────────────
+  getJson("/market/dvol").then((d) => {
+    snap.vol = d.vol;
+    snap.vol_pct = d.vol_pct;
+    volPct = d.vol_pct;
+    setLiveField("vol", d.vol);
+    refreshBanner();
+  }).catch(() => {});
+
+  // ── 3. Funding / mu (independent) ────────────────────────────────────────
+  getJson("/market/funding").then((d) => {
+    snap.mu = d.mu;
+    snap.mu_pct = d.mu_pct;
+    snap.funding_8h_pct = d.funding_8h_pct;
+    muPct = d.mu_pct;
+    setLiveField("mu", d.mu);
+    setInfoLine("fundingLine1", `8h rate  ${d.funding_8h_pct}%  →  ${d.mu_pct}% ann`);
     setInfoLine("fundingLine2", `source   Binance perpetual funding`);
+    refreshBanner();
+  }).catch(() => {});
 
-    // ── Vol + Rate — resolved via C++ engine on backend ───────────────────────
+  // ── 4. Rate curve (independent) ──────────────────────────────────────────
+  const ratePromise = getJson("/market/rates").then((d) => {
+    snap.rate = d.rate;
+    snap.rate_pct = d.rate_pct;
+    snap.rate_curve = d.rate_curve;
+    snap.rate_curve_pct = d.rate_curve_pct;
+    ratePct = d.rate_pct;
+    refreshBanner();
+    return d;
+  }).catch(() => null);
+
+  // ── 5. IV surface — after spot resolves ───────────────────────────────────
+  const surfacePromise = spotPromise.then((spot) =>
+    getJson(`/market/surface?spot=${encodeURIComponent(spot)}`)
+  ).then((d) => {
+    snap.iv_surface = d.iv_surface;
+    return d.iv_surface;
+  }).catch(() => []);
+
+  // ── 6. Resolve vol+rate once surface+rates ready — updates input fields and
+  //       info lines only; banner iv/r slots already show DVOL/rate from above
+  Promise.all([surfacePromise, ratePromise]).then(async () => {
+    snap.fetched_at = new Date().toISOString();
+    ts = new Date(snap.fetched_at).toLocaleTimeString();
     const maturity     = Number(document.getElementById("maturity")?.value) || 0.25;
     const targetStrike = Number(strikeEl?.value) || snap.spot;
     const resolved     = await callResolve(snap, targetStrike, maturity);
     applyResolve(resolved, snap);
+    // Update banner rate slot once resolved; keep iv slot as DVOL (already shown)
+    if (resolved) ratePct = resolved.rate_pct;
+    refreshBanner();
+  }).catch(() => {});
 
-    const volPct  = resolved ? resolved.vol_pct  : snap.vol_pct;
-    const ratePct = resolved ? resolved.rate_pct : snap.rate_pct;
-    const ts = snap.fetched_at ? new Date(snap.fetched_at).toLocaleTimeString() : "now";
-    setBanner("ok", {
-      spot: `${snap.spot.toLocaleString()} USD`,
-      iv:   `${volPct}%`,
-      r:    `${ratePct}%`,
-      mu:   `${snap.mu_pct}% ann`,
-      ts,
-    });
-    return snap;
-  } catch (err) {
+  // Return after spot (so callers get snap quickly), rest streams in
+  return spotPromise.then(() => snap).catch((err) => {
     setBanner("error", `Fetch failed: ${err.message}`);
     throw err;
-  }
+  });
 }
 
 /**

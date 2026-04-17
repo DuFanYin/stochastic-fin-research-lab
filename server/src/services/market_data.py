@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import xml.etree.ElementTree as ET  # used in _fetch_rate_curve
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,6 +27,7 @@ log = logging.getLogger(__name__)
 
 _TIMEOUT = 6.0
 _client = httpx.AsyncClient(timeout=_TIMEOUT)
+_slow_client = httpx.AsyncClient(timeout=20.0)  # for slow government endpoints
 
 # ── Fallback constants ────────────────────────────────────────────────────────
 _FB_SPOT    = 65_000.0
@@ -206,60 +208,64 @@ async def _fetch_funding_rate() -> float:
 
 # ── 5. Rate term structure ────────────────────────────────────────────────────
 
-# Maps Treasury security_desc values to tenor keys
-_TENOR_MAP = {
-    "Treasury Bills":  "3m",   # catch-all for short bills
-    "1-Month":         "1m",
-    "3-Month":         "3m",
-    "6-Month":         "6m",
-    "1-Year":          "1y",
-    "2-Year":          "2y",
-}
-
 _TENOR_YEARS = {"1m": 1/12, "3m": 0.25, "6m": 0.5, "1y": 1.0, "2y": 2.0}
 
-_TENOR_FILTER = (
-    "security_desc:in:(Treasury Bills,1-Month,3-Month,6-Month,1-Year,2-Year)"
-)
-
 _FALLBACK_CURVE = {"1m": 0.043, "3m": 0.045, "6m": 0.046, "1y": 0.047, "2y": 0.047}
+
+_RATE_CURVE_CACHE: dict[str, float] | None = None
+_RATE_CURVE_FETCHED_AT: float = 0.0
+_RATE_CURVE_TTL = 3600.0  # seconds — Treasury data is daily, 1h cache is plenty
 
 
 async def _fetch_rate_curve() -> dict[str, float]:
     """
-    US Treasury FiscalData — fetch the most recent avg interest rate for
-    each of 1M / 3M / 6M / 1Y / 2Y tenors.
-    Returns dict of tenor → decimal rate.
+    US Treasury XML yield curve — fetched once per server session (TTL 1h).
+    Treasury data is daily so there is no value in re-fetching on every user refresh.
     """
-    url = "https://api.fiscaldata.treasury.gov/services/api/v1/accounting/od/avg_interest_rates"
-    params = {
-        "fields":     "record_date,security_desc,avg_interest_rate_amt",
-        "filter":     _TENOR_FILTER,
-        "sort":       "-record_date",
-        "page[size]": "20",
+    global _RATE_CURVE_CACHE, _RATE_CURVE_FETCHED_AT
+    import time
+    if _RATE_CURVE_CACHE is not None and (time.monotonic() - _RATE_CURVE_FETCHED_AT) < _RATE_CURVE_TTL:
+        return _RATE_CURVE_CACHE
+
+    now = datetime.now(timezone.utc)
+    url = (
+        "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml"
+        f"?data=daily_treasury_yield_curve&field_tdr_date_value_month={now.strftime('%Y%m')}"
+    )
+    _XML_NS = "http://schemas.microsoft.com/ado/2007/08/dataservices"
+    _XML_NS_M = f"{{{_XML_NS}/metadata}}"
+    _FIELD_MAP = {
+        "BC_1MONTH": "1m", "BC_3MONTH": "3m",
+        "BC_6MONTH": "6m", "BC_1YEAR":  "1y", "BC_2YEAR": "2y",
     }
     try:
-        r = await _client.get(url, params=params)
+        r = await _slow_client.get(url)
         r.raise_for_status()
-        rows = r.json().get("data", [])
-        if not rows:
-            raise ValueError("empty rate rows")
-
+        root = ET.fromstring(r.text)
+        atom = "http://www.w3.org/2005/Atom"
+        entries = root.findall(f"{{{atom}}}entry")
+        if not entries:
+            raise ValueError("no XML entries")
+        # last entry = most recent date; two-step find avoids path namespace issues
+        content = entries[-1].find(f"{{{atom}}}content")
+        props = content.find(f"{_XML_NS_M}properties") if content is not None else None
+        if props is None:
+            raise ValueError("no properties element")
         curve: dict[str, float] = {}
-        # rows are sorted newest-first; take the first hit per tenor
-        for row in rows:
-            desc = row.get("security_desc", "")
-            tenor = next((v for k, v in _TENOR_MAP.items() if k in desc), None)
-            if tenor and tenor not in curve:
-                curve[tenor] = float(row["avg_interest_rate_amt"]) / 100.0
-
-        # fill any missing tenors from fallback
+        for field, tenor in _FIELD_MAP.items():
+            el = props.find(f"{{{_XML_NS}}}{field}")
+            if el is not None and el.text:
+                curve[tenor] = float(el.text) / 100.0
         for t, fb in _FALLBACK_CURVE.items():
             curve.setdefault(t, fb)
+        _RATE_CURVE_CACHE = curve
+        _RATE_CURVE_FETCHED_AT = time.monotonic()
         return curve
 
     except Exception as exc:
         log.warning("Rate curve failed (%s), using fallback", exc)
+        if _RATE_CURVE_CACHE is not None:
+            return _RATE_CURVE_CACHE
         return dict(_FALLBACK_CURVE)
 
 

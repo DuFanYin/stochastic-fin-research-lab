@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from math import isfinite
 from uuid import uuid4
 
-from src.services.engine_client import get_max_threads, is_engine_available
+from src.services.engine_client import get_max_threads, is_engine_available, run_engine_task
 
 RAW_JSON_DECIMALS = 5
 
@@ -56,3 +56,11 @@ def _record(
         "context_snapshot": {},
         "created_at":      _ts(),
     }
+
+
+def dispatch_task(payload: dict, task_type: str, trace_prefix: str) -> dict:
+    """Attach metadata then call the per-task C++ ABI entrypoint."""
+    request = dict(payload)
+    request["contract_version"] = "v1"
+    request.setdefault("trace_id", f"{trace_prefix}-{int(datetime.now(timezone.utc).timestamp() * 1_000_000)}")
+    return run_engine_task(task_type, request)
