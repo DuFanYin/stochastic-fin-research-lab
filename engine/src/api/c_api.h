@@ -19,6 +19,12 @@ int sf_run_measure_density_json(const char* request_json, char* out_response_jso
 int sf_run_measure_compare_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
 int sf_run_pde_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
 int sf_run_vol_surface_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
+int sf_run_greek_surface_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
+int sf_run_multi_leg_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
+int sf_run_implied_vol_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
+int sf_run_implied_vol_batch_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
+int sf_run_heston_calibrate_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
+int sf_run_heston_price_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
 
 // ── Thread control ────────────────────────────────────────────────────────────
 void sf_set_num_threads(int n_threads);

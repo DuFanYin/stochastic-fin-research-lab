@@ -22,6 +22,7 @@ from src.services.engine_client import (
 from src.services.analytics import (
     summarize_density,
 )
+from src.services.explainable_qa import build_explainable_qa
 from src.api.shared import _diag, _record, dispatch_task
 
 router = APIRouter(tags=["validation"])
@@ -141,4 +142,10 @@ def tool_measure_compare(req: MeasureCompareRequest) -> dict:
 
 @router.post("/tool/validation/gate")
 def tool_validation_gate(req: ValidationGateRequest) -> dict:
-    return dispatch_task(req.model_dump(), task_type="validation_gate", trace_prefix="validation")
+    req_payload = req.model_dump()
+    gate = dispatch_task(req_payload, task_type="validation_gate", trace_prefix="validation")
+    details = gate.setdefault("result_details", {})
+    rows = details.get("rows", [])
+    summary = gate.get("result_summary", {})
+    details["explainable_qa"] = build_explainable_qa(rows, summary, req_payload)
+    return gate

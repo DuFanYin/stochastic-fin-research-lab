@@ -1,11 +1,31 @@
 #pragma once
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <random>
 #include <span>
 #include <vector>
 
 namespace sf {
+
+// ── Optimizer ─────────────────────────────────────────────────────────────────
+
+struct OptResult {
+    std::vector<double> x;
+    double fval      = 1e30;
+    int    iterations = 0;
+    bool   converged  = false;
+};
+
+OptResult nelder_mead(
+    std::function<double(std::span<const double>)> objective,
+    std::span<const double> x0,
+    std::span<const double> lower,
+    std::span<const double> upper,
+    double tol      = 1e-6,
+    int    max_iter = 1000
+);
 
 // ── Numerics ──────────────────────────────────────────────────────────────────
 
@@ -26,6 +46,22 @@ void   stats_normal(double mu, double sigma, double theta, int sample_size,
 
 void ito_check(int function_code, double theta, double t, int n_steps,
                double* out_value, double* out_target);
+
+// ── MC Sampler ────────────────────────────────────────────────────────────────
+
+enum class SamplerType { Pseudorandom = 0, Antithetic = 1, Sobol = 2 };
+
+class SobolEngine {
+public:
+    explicit SobolEngine(int dimension);
+    void next(std::span<double> out_unit);
+    void skip(int n);
+private:
+    int dim_;
+    unsigned counter_;
+    std::vector<std::vector<uint32_t>> V_;
+    std::vector<uint32_t> X_;
+};
 
 // ── Simulation ────────────────────────────────────────────────────────────────
 
@@ -82,6 +118,7 @@ int measure_compare    (double mu, double r, double sigma, double t,
 // ── Pricing ───────────────────────────────────────────────────────────────────
 
 double bs_closed_form_price (double spot, double strike, double rate, double vol, double maturity);
+double bs_closed_form_price (double spot, double strike, double rate, double vol, double maturity, bool is_call);
 double bs_delta             (double spot, double strike, double rate, double vol, double maturity);
 double digital_call_bs_price(double spot, double strike, double rate, double vol,
                               double maturity, double dividend_yield);
@@ -89,16 +126,32 @@ double digital_call_bs_price(double spot, double strike, double rate, double vol
 double mc_price            (double spot, double strike, int n_paths);
 double mc_price_full       (double spot, double strike, double rate, double vol,
                             double maturity, int n_paths);
+double mc_price_full       (double spot, double strike, double rate, double vol,
+                            double maturity, int n_paths, bool is_call);
+double mc_price_full       (double spot, double strike, double rate, double vol,
+                            double maturity, int n_paths, bool is_call, SamplerType sampler);
 double mc_price_with_stderr(double spot, double strike, double rate, double vol,
                             double maturity, int n_paths, double* out_stderr);
+double mc_price_with_stderr(double spot, double strike, double rate, double vol,
+                            double maturity, int n_paths, double* out_stderr, bool is_call);
+double mc_price_with_stderr(double spot, double strike, double rate, double vol,
+                            double maturity, int n_paths, double* out_stderr, bool is_call,
+                            SamplerType sampler);
 
 double binomial_price         (double spot, double strike, double rate, double vol,
                                double maturity, int steps);
+double binomial_price         (double spot, double strike, double rate, double vol,
+                               double maturity, int steps, bool is_call);
 double binomial_american_price(double spot, double strike, double rate, double vol,
                                double maturity, int steps, double dividend_yield = 0.0);
 
 void pricing_greeks     (double spot, double strike, double rate, double vol, double maturity,
-                         double* out_delta_bs, double* out_vega_bs);
+                         double dividend_yield,
+                         double* out_delta_bs, double* out_gamma_bs,
+                         double* out_theta_bs, double* out_vega_bs, double* out_rho_bs);
+void greek_surface_grid (double strike, double rate, double vol, double dividend_yield,
+                         std::span<const double> spots, std::span<const double> maturities,
+                         int greek_code, std::span<double> out_grid);
 void pricing_error_decomp(double mc, double bs, double binomial,
                           double* out_mc_minus_bs, double* out_binomial_minus_bs);
 void scenario_bs5       (double spot, double strike, double rate, double vol,
@@ -113,6 +166,25 @@ void pricing_batch      (std::span<const double> spots,
                          std::span<double> out_mc,
                          std::span<double> out_bs,
                          std::span<double> out_binomial);
+
+double bs_implied_vol   (double market_price, double spot, double strike,
+                         double rate, double maturity, double dividend_yield,
+                         double tol = 1e-6, int max_iter = 100);
+void   implied_vol_batch(std::span<const double>  market_prices,
+                         std::span<const double>  strikes,
+                         std::span<const double>  expiries,
+                         double spot, double rate, double dividend_yield,
+                         std::span<double>        out_ivs,
+                         std::span<uint8_t>       out_converged);
+
+double heston_call_price(double spot, double strike, double rate, double maturity,
+                         double v0, double kappa, double theta, double xi, double rho,
+                         int quad_points = 64);
+void   heston_price_batch(double spot, double rate,
+                          std::span<const double> strikes,
+                          std::span<const double> maturities,
+                          double v0, double kappa, double theta, double xi, double rho,
+                          std::span<double> out_prices);
 
 double pde_price        (double spot, double strike, double rate, double vol,
                          double maturity, double dividend_yield,

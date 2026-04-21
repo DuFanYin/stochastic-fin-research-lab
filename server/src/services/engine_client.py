@@ -31,6 +31,12 @@ if _lib is not None:
         "measure_compare": "sf_run_measure_compare_json",
         "pde": "sf_run_pde_json",
         "vol_surface": "sf_run_vol_surface_json",
+        "greek_surface": "sf_run_greek_surface_json",
+        "multi_leg":           "sf_run_multi_leg_json",
+        "implied_vol":         "sf_run_implied_vol_json",
+        "implied_vol_batch":   "sf_run_implied_vol_batch_json",
+        "heston_calibrate":    "sf_run_heston_calibrate_json",
+        "heston_price":        "sf_run_heston_price_json",
     }
     for _sym in _TASK_TO_SYMBOL.values():
         fn = getattr(_lib, _sym)
@@ -127,7 +133,10 @@ def pricing_bundle(
         "binomial": s.get("binomial", 0.0),
         "mc_std_err":         s.get("mc_std_err",      0.0),
         "delta_bs":           greeks.get("delta_bs",   0.5),
+        "gamma_bs":           greeks.get("gamma_bs",   0.0),
+        "theta_bs":           greeks.get("theta_bs",   0.0),
         "vega_bs":            greeks.get("vega_bs",    0.0),
+        "rho_bs":             greeks.get("rho_bs",     0.0),
         "mc_minus_bs":        err.get("mc_minus_bs",   0.0),
         "binomial_minus_bs":  err.get("binomial_minus_bs", 0.0),
     }
@@ -356,6 +365,154 @@ def vol_surface_interp(
     if iv is None or iv <= 0:
         return None
     return float(iv), str(method)
+
+
+def greek_surface(
+    strike: float, rate: float, vol: float, dividend_yield: float,
+    spot_min: float, spot_max: float,
+    mat_min: float = 0.1, mat_max: float = 3.0,
+    n_spots: int = 21, n_mats: int = 11,
+    greek: str = "delta",
+) -> dict:
+    r = run_engine_task("greek_surface", {
+        "strike": strike, "rate": rate, "vol": vol, "dividend_yield": dividend_yield,
+        "spot_min": spot_min, "spot_max": spot_max,
+        "mat_min": mat_min, "mat_max": mat_max,
+        "n_spots": n_spots, "n_mats": n_mats, "greek": greek,
+    })
+    if r.get("status") == "error":
+        return {"greek": greek, "spots": [], "maturities": [], "grid": [],
+                "grid_min": 0.0, "grid_max": 1.0}
+    s  = r.get("result_summary", {})
+    rd = r.get("result_details", {})
+    return {
+        "greek":      s.get("greek",    greek),
+        "spots":      rd.get("spots",      []),
+        "maturities": rd.get("maturities", []),
+        "grid":       rd.get("grid",       []),
+        "grid_min":   s.get("grid_min",  0.0),
+        "grid_max":   s.get("grid_max",  1.0),
+        "n_spots":    s.get("n_spots",    0),
+        "n_mats":     s.get("n_mats",     0),
+    }
+
+
+def multi_leg(
+    spot: float, rate: float, vol: float, maturity: float,
+    legs: list[dict],
+    dividend_yield: float = 0.0,
+    n_paths: int = 10000,
+) -> dict:
+    """legs: list of {option_type, strike, quantity}"""
+    r = run_engine_task("multi_leg", {
+        "spot": spot, "rate": rate, "vol": vol, "maturity": maturity,
+        "dividend_yield": dividend_yield, "n_paths": n_paths, "legs": legs,
+    })
+    if r.get("status") == "error":
+        return {"net_bs_price": 0.0, "net_mc_price": 0.0, "net_delta": 0.0,
+                "net_vega": 0.0, "strategy_hint": "error", "legs": []}
+    s  = r.get("result_summary", {})
+    rd = r.get("result_details", {})
+    return {
+        "net_bs_price":  s.get("net_bs_price",  0.0),
+        "net_mc_price":  s.get("net_mc_price",  0.0),
+        "net_delta":     s.get("net_delta",     0.0),
+        "net_vega":      s.get("net_vega",      0.0),
+        "strategy_hint": s.get("strategy_hint", ""),
+        "n_legs":        s.get("n_legs",        0),
+        "legs":          rd.get("legs",         []),
+    }
+
+
+def implied_vol_single(
+    market_price: float, spot: float, strike: float,
+    rate: float, maturity: float, dividend_yield: float = 0.0,
+) -> dict:
+    r = run_engine_task("implied_vol", {
+        "market_price": market_price, "spot": spot, "strike": strike,
+        "rate": rate, "maturity": maturity, "dividend_yield": dividend_yield,
+    })
+    if r.get("status") == "error":
+        return {"implied_vol": -1.0, "converged": False, "final_error": 0.0}
+    s = r.get("result_summary", {})
+    return {
+        "implied_vol":  s.get("implied_vol",  -1.0),
+        "converged":    s.get("converged",    False),
+        "final_error":  s.get("final_error",  0.0),
+    }
+
+
+def implied_vol_batch(
+    market_prices: list[float], strikes: list[float], expiries: list[float],
+    spot: float, rate: float, dividend_yield: float = 0.0,
+) -> dict:
+    r = run_engine_task("implied_vol_batch", {
+        "spot": spot, "rate": rate, "dividend_yield": dividend_yield,
+        "market_prices": market_prices, "strikes": strikes, "expiries": expiries,
+    })
+    if r.get("status") == "error":
+        return {"ivs": [-1.0] * len(market_prices), "converged": [False] * len(market_prices),
+                "n_converged": 0, "convergence_rate": 0.0}
+    s  = r.get("result_summary", {})
+    rd = r.get("result_details", {})
+    return {
+        "ivs":              rd.get("ivs",       []),
+        "converged":        rd.get("converged", []),
+        "n_converged":      s.get("n_converged", 0),
+        "convergence_rate": s.get("convergence_rate", 0.0),
+    }
+
+
+def heston_price(
+    spot: float, strike: float, rate: float, maturity: float,
+    v0: float = 0.04, kappa: float = 1.5, theta: float = 0.04,
+    xi: float = 0.5, rho: float = -0.7,
+) -> float:
+    r = run_engine_task("heston_price", {
+        "spot": spot, "strike": strike, "rate": rate, "maturity": maturity,
+        "v0": v0, "kappa": kappa, "theta": theta, "xi": xi, "rho": rho,
+    })
+    if r.get("status") == "error":
+        return max(spot - strike, 0.0)
+    return r.get("result_summary", {}).get("heston_price", 0.0)
+
+
+def heston_calibrate(
+    spot: float, rate: float,
+    market_strikes: list[float], market_maturities: list[float], market_prices: list[float],
+    dividend_yield: float = 0.0,
+    init_v0: float = 0.04, init_kappa: float = 1.5, init_theta: float = 0.04,
+    init_xi: float = 0.5, init_rho: float = -0.7,
+    max_iter: int = 500,
+) -> dict:
+    r = run_engine_task("heston_calibrate", {
+        "spot": spot, "rate": rate, "dividend_yield": dividend_yield,
+        "market_strikes": market_strikes, "market_maturities": market_maturities,
+        "market_prices": market_prices,
+        "init_v0": init_v0, "init_kappa": init_kappa, "init_theta": init_theta,
+        "init_xi": init_xi, "init_rho": init_rho, "max_iter": max_iter,
+    })
+    default = {"v0": init_v0, "kappa": init_kappa, "theta": init_theta,
+               "xi": init_xi, "rho": init_rho, "rmse": 999.0,
+               "max_abs_error": 999.0, "iterations": 0, "converged": False,
+               "model_prices": [], "residuals": []}
+    if r.get("status") == "error":
+        return default
+    s  = r.get("result_summary", {})
+    rd = r.get("result_details", {})
+    return {
+        "v0":            s.get("v0",            init_v0),
+        "kappa":         s.get("kappa",         init_kappa),
+        "theta":         s.get("theta",         init_theta),
+        "xi":            s.get("xi",            init_xi),
+        "rho":           s.get("rho",           init_rho),
+        "rmse":          s.get("rmse",          999.0),
+        "max_abs_error": s.get("max_abs_error", 999.0),
+        "iterations":    s.get("iterations",    0),
+        "converged":     s.get("converged",     False),
+        "model_prices":  rd.get("model_prices", []),
+        "residuals":     rd.get("residuals",    []),
+    }
 
 
 def run_convergence_steps(

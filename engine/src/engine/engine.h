@@ -21,6 +21,7 @@ struct PricingParams {
     bool   fx_mode       = false;
     std::string product_type = "european_call";
     std::string numeraire    = "money_market";
+    std::string mc_sampler   = "pseudorandom";  // "pseudorandom" | "antithetic" | "sobol"
 };
 
 struct BatchGridParams {
@@ -29,9 +30,41 @@ struct BatchGridParams {
     double spot_shock = 0.02;
 };
 
+struct GreekSurfaceParams {
+    double strike         = 0.0;
+    double rate           = 0.0;
+    double vol            = 0.0;
+    double dividend_yield = 0.0;
+    double spot_min       = 0.0;
+    double spot_max       = 0.0;
+    double mat_min        = 0.1;
+    double mat_max        = 3.0;
+    int    n_spots        = 21;
+    int    n_mats         = 11;
+    std::string greek     = "delta";
+};
+
+struct LegSpec {
+    std::string option_type = "call";  // "call" | "put"
+    double strike   = 0.0;
+    double quantity = 1.0;  // signed notional (positive=long, negative=short)
+};
+
+struct MultiLegParams {
+    double spot          = 0.0;
+    double rate          = 0.0;
+    double vol           = 0.0;
+    double maturity      = 0.0;
+    double dividend_yield = 0.0;
+    int    n_paths       = 10000;
+    std::vector<LegSpec> legs;
+};
+
 PricingResult      run_pricing(const PricingParams& p);
 PricingBatchResult run_pricing_batch(const std::vector<PricingParams>& jobs, double runtime_ms);
 PricingBatchResult run_pricing_batch_grid(const BatchGridParams& p, double runtime_ms);
+GreekSurfaceResult run_greek_surface(const GreekSurfaceParams& p);
+MultiLegResult     run_multi_leg(const MultiLegParams& p);
 
 // ── ScenarioEngine ────────────────────────────────────────────────────────────
 
@@ -196,6 +229,58 @@ struct VolSurfaceResult {
     double iv            = 0.0;
     std::string method;   // "cpp_bilinear" | "cpp_nearest"
 };
+
+// ── CalibrationEngine ─────────────────────────────────────────────────────────
+
+struct ImpliedVolParams {
+    double market_price  = 0.0;
+    double spot          = 0.0;
+    double strike        = 0.0;
+    double rate          = 0.0;
+    double maturity      = 0.0;
+    double dividend_yield = 0.0;
+};
+
+struct ImpliedVolBatchParams {
+    std::vector<double> market_prices;
+    std::vector<double> strikes;
+    std::vector<double> expiries;
+    double spot          = 0.0;
+    double rate          = 0.0;
+    double dividend_yield = 0.0;
+};
+
+struct HestonCalibrationParams {
+    double spot           = 0.0;
+    double rate           = 0.0;
+    double dividend_yield = 0.0;
+    std::vector<double> market_strikes;
+    std::vector<double> market_maturities;
+    std::vector<double> market_prices;
+    double init_v0    = 0.04;
+    double init_kappa = 1.5;
+    double init_theta = 0.04;
+    double init_xi    = 0.5;
+    double init_rho   = -0.7;
+    int    max_iter   = 500;
+};
+
+struct HestonPriceParams {
+    double spot     = 0.0;
+    double strike   = 0.0;
+    double rate     = 0.0;
+    double maturity = 0.0;
+    double v0       = 0.04;
+    double kappa    = 1.5;
+    double theta    = 0.04;
+    double xi       = 0.5;
+    double rho      = -0.7;
+};
+
+ImpliedVolResult          run_implied_vol        (const ImpliedVolParams& p);
+ImpliedVolBatchResult     run_implied_vol_batch  (const ImpliedVolBatchParams& p);
+HestonCalibrationResult   run_heston_calibrate   (const HestonCalibrationParams& p);
+double                    run_heston_price       (const HestonPriceParams& p);
 
 SimulationResult     run_simulation      (const SimulationParams& p);
 StatsResult          run_stats           (const StatsParams& p);

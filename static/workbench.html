@@ -103,7 +103,7 @@
               <span class="live-info-line" id="fundingLine2">source  —</span>
             </div>
 
-            <div class="mode-params" data-modes="runBtnPricing,runBtnScenario">
+            <div class="mode-params" data-modes="runBtnPricing,runBtnScenario,runBtnStress,runBtnIv">
               <div class="param-group-label">Pricing</div>
               <div class="field"><label>MC paths</label><input id="nPaths" type="number" value="20000"></div>
               <div class="field param-full">
@@ -128,9 +128,17 @@
                 <label>American</label>
                 <button type="button" id="isAmerican" class="switch-btn" data-value="false">Off</button>
               </div>
+              <div class="field param-full">
+                <label>MC Sampler</label>
+                <div id="mcSampler" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="pseudorandom">Pseudorandom</button>
+                  <button type="button" class="select-btn" data-value="antithetic">Antithetic</button>
+                  <button type="button" class="select-btn" data-value="sobol">Sobol</button>
+                </div>
+              </div>
             </div>
 
-            <div class="mode-params" data-modes="runBtnPricing">
+            <div id="batchPricingParams" class="mode-params" data-modes="runBtnPricing" style="display:none">
               <div class="param-group-label">Batch Pricing</div>
               <div class="field"><label>jobs</label><input id="batchJobs" type="number" value="16"></div>
               <div class="field"><label>Spot Shock</label><input id="batchSpotShock" type="number" value="0.02" step="0.01"></div>
@@ -143,6 +151,100 @@
               <div class="field"><label title="Transaction cost in basis points">TC (bps)</label><input id="hedgeTcBps" type="number" value="5" step="0.5"></div>
               <div class="field"><label title="Only rebalance when |target delta - current delta| exceeds this">Threshold</label><input id="hedgeThreshold" type="number" value="0.02" step="0.005"></div>
               <div class="field param-full"><label title="Hedging model volatility multiplier">Vol mismatch x</label><input id="hedgeVolMismatchMult" type="number" value="1.15" step="0.05"></div>
+            </div>
+
+            <div class="mode-params" data-modes="runBtnStress">
+              <div class="param-group-label">Stress Library</div>
+              <div class="field param-full">
+                <label>Scenario Pack</label>
+                <div id="stressPack" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="core4">Core 4</button>
+                  <button type="button" class="select-btn" data-value="vol_first">Vol First</button>
+                  <button type="button" class="select-btn" data-value="rates_first">Rates First</button>
+                  <button type="button" class="select-btn" data-value="crash_kit">Crash Kit</button>
+                </div>
+              </div>
+              <div class="field param-full">
+                <label>Severity</label>
+                <div id="stressSeverity" class="select-buttons">
+                  <button type="button" class="select-btn" data-value="mild">Mild</button>
+                  <button type="button" class="select-btn active" data-value="moderate">Moderate</button>
+                  <button type="button" class="select-btn" data-value="severe">Severe</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Include Hedge</label>
+                <button type="button" id="stressIncludeHedge" class="switch-btn" data-value="true">On</button>
+              </div>
+            </div>
+
+            <div class="mode-params" data-modes="runBtnIv">
+              <div class="param-group-label">IV Diagnostics</div>
+              <div class="field">
+                <label>Smile Points</label>
+                <input id="ivSmilePoints" type="number" value="17" min="5" max="21" step="2">
+              </div>
+              <div class="field">
+                <label>K Steps</label>
+                <input id="ivKSteps" type="number" value="15" min="5" max="21" step="2">
+              </div>
+              <div class="field">
+                <label>T Steps</label>
+                <input id="ivTSteps" type="number" value="11" min="5" max="21" step="2">
+              </div>
+              <div class="field param-full">
+                <label>Burst Lower Quantile: <span id="burstLowerVal">10%</span></label>
+                <input id="burstLowerQ" type="range" min="0" max="49" step="1" value="10" style="width:100%">
+              </div>
+              <div class="field param-full">
+                <label>Burst Upper Quantile: <span id="burstUpperVal">90%</span></label>
+                <input id="burstUpperQ" type="range" min="51" max="100" step="1" value="90" style="width:100%">
+              </div>
+            </div>
+
+            <div class="mode-params" data-modes="runBtnGreekSurface">
+              <div class="param-group-label">Greek Surface</div>
+              <div class="field param-full">
+                <label>Greek</label>
+                <div id="greekSelector" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="delta">Delta</button>
+                  <button type="button" class="select-btn" data-value="gamma">Gamma</button>
+                  <button type="button" class="select-btn" data-value="vega">Vega</button>
+                  <button type="button" class="select-btn" data-value="theta">Theta</button>
+                  <button type="button" class="select-btn" data-value="rho">Rho</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Spot grid pts</label>
+                <input id="greekSurfaceNSpots" type="number" value="21" min="5" max="50" step="2">
+              </div>
+              <div class="field">
+                <label>Mat grid pts</label>
+                <input id="greekSurfaceNMats" type="number" value="11" min="5" max="30" step="2">
+              </div>
+            </div>
+
+            <div class="mode-params" data-modes="runBtnCalibration">
+              <div class="param-group-label">Calibration</div>
+              <div class="field param-full">
+                <label>Model</label>
+                <div id="calibrationModel" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="bs_iv">BS Implied Vol</button>
+                  <button type="button" class="select-btn" data-value="heston">Heston</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Max Iter (Heston)</label>
+                <input id="calibrationMaxIter" type="number" value="500" min="50" max="5000">
+              </div>
+            </div>
+
+            <div class="mode-params" data-modes="runBtnMultiLeg">
+              <div class="param-group-label">Multi-Leg Strategy</div>
+              <div class="field param-full">
+                <label>Legs (JSON array)</label>
+                <textarea id="multiLegLegs" rows="4" style="font-family:monospace;font-size:0.85em;width:100%;box-sizing:border-box;">[{"option_type":"call","strike":100,"quantity":1},{"option_type":"put","strike":100,"quantity":1}]</textarea>
+              </div>
             </div>
 
             <div class="mode-params" data-modes="runBtnPde,runBtnBenchmark">
@@ -192,6 +294,11 @@
               <div class="button-row">
                 <button id="runBtnPricing" class="mode-switch" type="button">Pricing</button>
                 <button id="runBtnScenario" class="mode-switch" type="button">Scenario</button>
+                <button id="runBtnIv" class="mode-switch" type="button">IV</button>
+                <button id="runBtnGreekSurface" class="mode-switch" type="button">Greeks</button>
+                <button id="runBtnCalibration" class="mode-switch" type="button">Calibration</button>
+                <button id="runBtnMultiLeg" class="mode-switch" type="button">Multi-Leg</button>
+                <button id="runBtnStress" class="mode-switch" type="button">Stress</button>
                 <button id="runBtnHedge" class="mode-switch" type="button">Hedging</button>
               </div>
               <div class="button-row">
@@ -282,6 +389,31 @@
             <div id="scenarioOut"></div>
           </section>
 
+          <section id="resultCardIv" class="result-section is-hidden">
+            <div class="result-section-label">IV Diagnostics<span id="diagIv" class="diag-badge"></span></div>
+            <div id="ivOut"></div>
+          </section>
+
+          <section id="resultCardGreekSurface" class="result-section is-hidden">
+            <div class="result-section-label">Greek Surface</div>
+            <div id="greekSurfaceOut"></div>
+          </section>
+
+          <section id="resultCardCalibration" class="result-section is-hidden">
+            <div class="result-section-label">Calibration</div>
+            <div id="calibrationOut"></div>
+          </section>
+
+          <section id="resultCardMultiLeg" class="result-section is-hidden">
+            <div class="result-section-label">Multi-Leg Strategy</div>
+            <div id="multiLegOut"></div>
+          </section>
+
+          <section id="resultCardStress" class="result-section is-hidden">
+            <div class="result-section-label">Stress Library<span id="diagStress" class="diag-badge"></span></div>
+            <div id="stressOut"></div>
+          </section>
+
           <section id="resultCardHedge" class="result-section is-hidden">
             <div class="result-section-label">Hedging<span id="diagHedge" class="diag-badge"></span></div>
             <div id="hedgeOut"></div>
@@ -318,6 +450,17 @@
       </section>
     </main>
   </div>
+  <template id="tplResultWrap"><div class="result-panel">{{inner}}</div></template>
+  <template id="tplSectionLabel"><div class="res-section-label">{{text}}</div></template>
+  <template id="tplStatusRunning"><div class="diag-line"><span class="status-dot running"></span>Running... {{label}}</div></template>
+  <template id="tplStatusError"><div class="diag-line error">{{msg}}</div></template>
+  <template id="tplErrorToast">
+    <div class="error-toast" role="alert" aria-live="assertive">
+      <div class="error-toast-title">{{title}}</div>
+      <div class="error-toast-body">{{message}}</div>
+      <button type="button" class="error-toast-close" aria-label="Close error popup">Dismiss</button>
+    </div>
+  </template>
   <div id="toastHost" class="toast-host" aria-live="polite"></div>
   <script type="module" src="assets/js/app.js"></script>
 </body>

@@ -4,7 +4,7 @@
 
 namespace sf {
 
-double binomial_price(double spot, double strike, double rate, double vol, double maturity, int steps) {
+double binomial_price(double spot, double strike, double rate, double vol, double maturity, int steps, bool is_call) {
     if (spot <= 0.0 || strike <= 0.0 || maturity <= 0.0 || vol <= 0.0 || steps <= 0) {
         return 0.0;
     }
@@ -17,7 +17,8 @@ double binomial_price(double spot, double strike, double rate, double vol, doubl
     std::vector<double> values(steps + 1, 0.0);
     for (int i = 0; i <= steps; ++i) {
         const double st = spot * std::pow(u, i) * std::pow(d, steps - i);
-        values[i] = st > strike ? (st - strike) : 0.0;
+        values[i] = is_call ? (st > strike ? st - strike : 0.0)
+                             : (strike > st ? strike - st : 0.0);
     }
     for (int t = steps - 1; t >= 0; --t) {
         for (int i = 0; i <= t; ++i) {
@@ -25,6 +26,10 @@ double binomial_price(double spot, double strike, double rate, double vol, doubl
         }
     }
     return values[0];
+}
+
+double binomial_price(double spot, double strike, double rate, double vol, double maturity, int steps) {
+    return binomial_price(spot, strike, rate, vol, maturity, steps, true);
 }
 
 double binomial_american_price(double spot, double strike, double rate, double vol, double maturity, int steps, double dividend_yield) {

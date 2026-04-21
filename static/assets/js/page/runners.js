@@ -5,8 +5,10 @@
    the transition between the two states.
 ────────────────────────────────────────────────────────────────────────────── */
 
-import { getSelectButtonValue, getSwitchValue, setRunning } from "../ui/controls.js";
 import {
+  getSelectButtonValue,
+  getSwitchValue,
+  setRunning,
   getDataMode,
   setHtml,
   statusError,
@@ -15,6 +17,8 @@ import {
   renderPricing,
   renderPricingBatch,
   renderScenario,
+  renderIv,
+  renderStress,
   renderHedging,
   renderPde,
   renderMeasure,
@@ -23,6 +27,9 @@ import {
   renderBenchmark,
   renderKv,
   renderValidation,
+  renderGreekSurface,
+  renderMultiLeg,
+  renderCalibration,
 } from "../ui/core.js";
 
 const API_BASE = `${window.location.origin}/api`;
@@ -319,6 +326,7 @@ export function basePayload() {
     numeraire:      getSelectButtonValue("numeraire"),
     fx_mode:        getSwitchValue("fxMode"),
     is_american:    getSwitchValue("isAmerican"),
+    mc_sampler:     getSelectButtonValue("mcSampler") || "pseudorandom",
   };
 }
 
@@ -395,6 +403,7 @@ export async function runValidationForCompute(isPicked, showOnly) {
     max_excess: summary.max_excess,
     max_excess_item: summary.max_excess_item,
     threshold_rows: gateData.result_details?.threshold_rows || rows,
+    explainable_qa: gateData.result_details?.explainable_qa || null,
   });
   return { passed, rows };
 }
@@ -453,6 +462,52 @@ export async function runScenario(showResultCard) {
     const data = await postJson("/tool/scenario/run", basePayload());
     renderScenario("scenarioOut", data);
   } catch (err) { showError("scenarioOut", err); }
+}
+
+export async function runIv(showResultCard) {
+  showResultCard("resultCardIv");
+  setRunning("ivOut", "iv diagnostics");
+  try {
+    const lowerQ = Number(document.getElementById("burstLowerQ")?.value ?? 10) / 100;
+    const upperQ = Number(document.getElementById("burstUpperQ")?.value ?? 90) / 100;
+    const data = await postJson("/market/iv/diagnostics", {
+      spot: Number(document.getElementById("spot").value),
+      strike: Number(document.getElementById("strike").value),
+      maturity: Number(document.getElementById("maturity").value),
+      smile_points: Number(document.getElementById("ivSmilePoints")?.value || 11),
+      moneyness_steps: Number(document.getElementById("ivKSteps")?.value || 9),
+      tenor_steps: Number(document.getElementById("ivTSteps")?.value || 7),
+      burst_lower_quantile: lowerQ,
+      burst_upper_quantile: upperQ,
+    });
+    renderIv("ivOut", data);
+  } catch (err) { showError("ivOut", err); }
+}
+
+export async function runStress(showResultCard) {
+  showResultCard("resultCardStress");
+  setRunning("stressOut", "stress library");
+  try {
+    const base = basePayload();
+    const data = await postJson("/tool/stress/run", {
+      spot: base.spot,
+      strike: base.strike,
+      rate: base.rate,
+      vol: base.vol,
+      maturity: base.maturity,
+      n_paths: base.n_paths,
+      dividend_yield: base.dividend_yield,
+      n_rebalances: Number(document.getElementById("nReb").value),
+      hedge_paths: Number(document.getElementById("hedgePaths").value),
+      transaction_cost_bps: Number(document.getElementById("hedgeTcBps").value),
+      rebalance_threshold: Number(document.getElementById("hedgeThreshold").value),
+      vol_mismatch_mult: Number(document.getElementById("hedgeVolMismatchMult").value),
+      stress_pack: getSelectButtonValue("stressPack"),
+      stress_severity: getSelectButtonValue("stressSeverity"),
+      include_hedge_compare: getSwitchValue("stressIncludeHedge"),
+    });
+    renderStress("stressOut", data);
+  } catch (err) { showError("stressOut", err); }
 }
 
 export async function runHedge(showResultCard) {
@@ -548,6 +603,122 @@ export async function runConvergence(showResultCard) {
   } catch (err) { showError("convergenceOut", err); }
 }
 
+export async function runGreekSurface(showResultCard) {
+  showResultCard("resultCardGreekSurface");
+  setRunning("greekSurfaceOut", "greek surface");
+  try {
+    const base  = basePayload();
+    const spot  = base.spot;
+    const data  = await postJson("/tool/greek/surface", {
+      strike:         base.strike,
+      rate:           base.rate,
+      vol:            base.vol,
+      dividend_yield: base.dividend_yield,
+      spot_min:       spot * 0.6,
+      spot_max:       spot * 1.4,
+      mat_min:        0.05,
+      mat_max:        Math.max(0.1, base.maturity * 2),
+      n_spots:        Number(document.getElementById("greekSurfaceNSpots")?.value || 21),
+      n_mats:         Number(document.getElementById("greekSurfaceNMats")?.value  || 11),
+      greek:          getSelectButtonValue("greekSelector") || "delta",
+    });
+    renderGreekSurface("greekSurfaceOut", data);
+  } catch (err) { showError("greekSurfaceOut", err); }
+}
+
+export async function runCalibration(showResultCard) {
+  showResultCard("resultCardCalibration");
+  setRunning("calibrationOut", "calibration");
+  try {
+    const base  = basePayload();
+    const model = getSelectButtonValue("calibrationModel") || "bs_iv";
+
+    if (model === "bs_iv") {
+      // Single BS IV: back-solve from the BS price at current params
+      const bsPrice = base.spot * 0.1; // fallback; ideally use live market price
+      const data = await postJson("/tool/calibration/iv", {
+        market_price:   bsPrice > 0 ? bsPrice : base.spot * 0.05,
+        spot:           base.spot,
+        strike:         base.strike,
+        rate:           base.rate,
+        maturity:       base.maturity,
+        dividend_yield: base.dividend_yield,
+      });
+      renderCalibration("calibrationOut", data, "bs_iv");
+    } else {
+      // Heston: build a synthetic smile grid from current params for calibration demo
+      const S = base.spot, K = base.strike, r = base.rate;
+      const v = base.vol, T = base.maturity, q = base.dividend_yield;
+      const kMult  = [0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15];
+      const tMult  = [0.5, 1.0];
+      const strikes = [], maturities = [], prices = [];
+      for (const km of kMult) {
+        for (const tm of tMult) {
+          strikes.push(K * km);
+          maturities.push(T * tm);
+          // Generate "market" price = BS price + small smile adjustment
+          const moneyness = Math.log(K * km / S);
+          const skew = -0.1 * moneyness;  // mild negative skew
+          const adjVol = Math.max(0.01, v + skew);
+          // We'll just pass the base vol price as market price (identity calibration)
+          prices.push(null);  // will be filled by the engine itself
+        }
+      }
+      // For a meaningful demo: calibrate to BS prices at slightly different vols
+      const synthPrices = strikes.map((k, i) => {
+        const mono = Math.log(k / S) / Math.sqrt(maturities[i]);
+        const adjV = Math.max(0.05, v * (1 + 0.15 * mono * mono - 0.1 * mono));
+        const d1 = (Math.log(S/k) + (r + 0.5*adjV*adjV)*maturities[i]) / (adjV*Math.sqrt(maturities[i]));
+        const d2 = d1 - adjV*Math.sqrt(maturities[i]);
+        const erf1 = 0.5*(1+Math.sign(d1)*Math.sqrt(1-Math.exp(-d1*d1*2/Math.PI)));
+        const erf2 = 0.5*(1+Math.sign(d2)*Math.sqrt(1-Math.exp(-d2*d2*2/Math.PI)));
+        return Math.max(S*erf1 - k*Math.exp(-r*maturities[i])*erf2, 0.001);
+      });
+
+      const maxIter = Number(document.getElementById("calibrationMaxIter")?.value || 500);
+      const data = await postJson("/tool/calibration/heston", {
+        spot:               S,
+        rate:               r,
+        dividend_yield:     q,
+        market_strikes:     strikes,
+        market_maturities:  maturities,
+        market_prices:      synthPrices,
+        init_v0:    v * v,
+        init_kappa: 1.5,
+        init_theta: v * v,
+        init_xi:    0.5,
+        init_rho:   -0.7,
+        max_iter:   maxIter,
+      });
+      renderCalibration("calibrationOut", data, "heston");
+    }
+  } catch (err) { showError("calibrationOut", err); }
+}
+
+export async function runMultiLeg(showResultCard) {
+  showResultCard("resultCardMultiLeg");
+  setRunning("multiLegOut", "multi-leg");
+  try {
+    const base = basePayload();
+    let legs;
+    try {
+      legs = JSON.parse(document.getElementById("multiLegLegs")?.value || "[]");
+    } catch {
+      legs = [{ option_type: "call", strike: base.strike, quantity: 1 }];
+    }
+    const data = await postJson("/tool/pricing/multi-leg", {
+      spot:           base.spot,
+      rate:           base.rate,
+      vol:            base.vol,
+      maturity:       base.maturity,
+      dividend_yield: base.dividend_yield,
+      n_paths:        base.n_paths,
+      legs,
+    });
+    renderMultiLeg("multiLegOut", data);
+  } catch (err) { showError("multiLegOut", err); }
+}
+
 export async function runBenchmark(showResultCard) {
   showResultCard("resultCardBenchmark");
   setRunning("benchmarkOut", "benchmark");
@@ -561,4 +732,43 @@ export async function runBenchmark(showResultCard) {
     });
     renderBenchmark("benchmarkOut", data);
   } catch (err) { showError("benchmarkOut", err); }
+}
+
+/* ─── Stress pack dynamic loader ─────────────────────────────────────────── */
+
+export async function loadStressPacks() {
+  try {
+    const data = await getJson("/tool/stress/packs");
+    const container = document.getElementById("stressPack");
+    if (!container || !Array.isArray(data.packs)) return;
+    const current = container.querySelector(".select-btn.active")?.dataset.value ?? "core4";
+    container.innerHTML = data.packs.map((pack, i) => {
+      const isActive = pack.id === current || (i === 0 && !data.packs.find(p => p.id === current));
+      return `<button type="button" class="select-btn${isActive ? " active" : ""}" data-value="${pack.id}" title="${pack.description}">${pack.name}</button>`;
+    }).join("");
+    // Re-init select-button listeners for this group
+    container.querySelectorAll(".select-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        container.querySelectorAll(".select-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+      });
+    });
+  } catch {
+    // Leave hardcoded fallback buttons in place
+  }
+}
+
+/* ─── Burst slider wiring ────────────────────────────────────────────────── */
+
+export function initBurstSliders() {
+  const lower = document.getElementById("burstLowerQ");
+  const upper = document.getElementById("burstUpperQ");
+  const lowerVal = document.getElementById("burstLowerVal");
+  const upperVal = document.getElementById("burstUpperVal");
+  if (lower && lowerVal) {
+    lower.addEventListener("input", () => { lowerVal.textContent = `${lower.value}%`; });
+  }
+  if (upper && upperVal) {
+    upper.addEventListener("input", () => { upperVal.textContent = `${upper.value}%`; });
+  }
 }

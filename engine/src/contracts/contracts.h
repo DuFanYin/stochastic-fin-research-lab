@@ -34,7 +34,10 @@ struct PricingResult {
     double american   = 0.0;
     bool   has_american = false;
     double delta_bs   = 0.0;
+    double gamma_bs   = 0.0;
+    double theta_bs   = 0.0;
     double vega_bs    = 0.0;
+    double rho_bs     = 0.0;
     double mc_minus_bs      = 0.0;
     double binomial_minus_bs = 0.0;
     double spread     = 0.0;
@@ -173,6 +176,74 @@ struct ValidationResult {
     std::string max_excess_item;
     std::string blocking_reason;
     std::vector<ValidationRow> rows;
+};
+
+// ── Multi-Leg ─────────────────────────────────────────────────────────────────
+
+struct LegResult {
+    std::string option_type;  // "call" | "put"
+    double      strike       = 0.0;
+    double      quantity     = 0.0;   // signed: positive = long, negative = short
+    double      bs_price     = 0.0;
+    double      mc_price     = 0.0;
+    double      delta_bs     = 0.0;
+    double      vega_bs      = 0.0;
+};
+
+struct MultiLegResult {
+    std::vector<LegResult> legs;
+    double net_bs_price  = 0.0;
+    double net_mc_price  = 0.0;
+    double net_delta     = 0.0;
+    double net_vega      = 0.0;
+    std::string strategy_hint;
+};
+
+// ── Calibration ───────────────────────────────────────────────────────────────
+
+struct ImpliedVolResult {
+    double implied_vol  = -1.0;
+    double final_error  = 0.0;
+    bool   converged    = false;
+};
+
+struct ImpliedVolBatchResult {
+    std::vector<double>   ivs;
+    std::vector<uint8_t>  converged;  // 1=converged, 0=failed (avoids vector<bool> bitfield)
+    int    n_converged  = 0;
+    double runtime_ms   = 0.0;
+};
+
+struct HestonCalibrationResult {
+    double v0     = 0.04;
+    double kappa  = 1.5;
+    double theta  = 0.04;
+    double xi     = 0.5;
+    double rho    = -0.7;
+    double rmse   = 0.0;
+    double max_abs_error = 0.0;
+    int    iterations    = 0;
+    bool   converged     = false;
+    std::vector<double> model_prices;
+    std::vector<double> residuals;
+    double runtime_ms    = 0.0;
+};
+
+// ── Greek Surface ─────────────────────────────────────────────────────────────
+
+struct GreekSurfaceResult {
+    std::string greek_name;
+    std::vector<double> spots;
+    std::vector<double> maturities;
+    std::vector<double> grid;        // row-major: spots × maturities
+    double grid_min   = 0.0;
+    double grid_max   = 0.0;
+    double strike     = 0.0;
+    double vol        = 0.0;
+    double rate       = 0.0;
+    std::string contract_version = "v1";
+    std::string trace_id;
+    double runtime_ms = 0.0;
 };
 
 }  // namespace sf

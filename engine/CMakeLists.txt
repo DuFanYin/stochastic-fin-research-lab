@@ -19,12 +19,16 @@ add_library(sf_engine STATIC
     # Kernel layer — pure numerical primitives
     src/kernel/numerics/utils.cpp
     src/kernel/simulation/path.cpp
+    src/kernel/simulation/sobol.cpp
     src/kernel/pricing/black_scholes.cpp
     src/kernel/pricing/monte_carlo.cpp
     src/kernel/pricing/binomial_lattice.cpp
     src/kernel/pricing/greeks.cpp
     src/kernel/pricing/pde.cpp
     src/kernel/pricing/hedging.cpp
+    src/kernel/pricing/implied_vol.cpp
+    src/kernel/pricing/heston.cpp
+    src/kernel/optimizer/nelder_mead.cpp
     src/kernel/stats/moments.cpp
     src/kernel/stats/stochastic_checks.cpp
     # Engine layer — domain workflows
@@ -33,6 +37,7 @@ add_library(sf_engine STATIC
     src/engine/hedging_engine.cpp
     src/engine/validation_engine.cpp
     src/engine/utility_engine.cpp
+    src/engine/calibration_engine.cpp
     # API layer — JSON parse + serialize + dispatch (single file)
     src/api/parser.cpp
 )

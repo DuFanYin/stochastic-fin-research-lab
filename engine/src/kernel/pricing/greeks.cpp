@@ -8,17 +8,65 @@ namespace sf {
 
 void pricing_greeks(
     double spot, double strike, double rate, double vol, double maturity,
-    double* out_delta_bs, double* out_vega_bs
+    double dividend_yield,
+    double* out_delta_bs, double* out_gamma_bs,
+    double* out_theta_bs, double* out_vega_bs, double* out_rho_bs
 ) {
-    if (!out_delta_bs || !out_vega_bs) return;
-    const double s = clamp_positive(spot);
-    const double k = clamp_positive(strike);
-    const double t = clamp_positive(maturity);
-    const double v = clamp_positive(vol);
+    const double s  = clamp_positive(spot);
+    const double k  = clamp_positive(strike);
+    const double t  = clamp_positive(maturity);
+    const double v  = clamp_positive(vol);
+    const double q  = dividend_yield;
+    const double r  = rate;
     const double sqrt_t = std::sqrt(t);
-    const double d1 = (std::log(s / k) + (rate + 0.5 * v * v) * t) / (v * sqrt_t);
-    *out_delta_bs = bs_delta(s, k, rate, v, t);
-    *out_vega_bs  = s * norm_pdf(d1) * sqrt_t;
+    const double d1 = (std::log(s / k) + (r - q + 0.5 * v * v) * t) / (v * sqrt_t);
+    const double d2 = d1 - v * sqrt_t;
+    if (out_delta_bs) *out_delta_bs = std::exp(-q * t) * norm_cdf(d1);
+    if (out_gamma_bs) *out_gamma_bs = std::exp(-q * t) * norm_pdf(d1) / (s * v * sqrt_t);
+    if (out_vega_bs)  *out_vega_bs  = s * std::exp(-q * t) * norm_pdf(d1) * sqrt_t;
+    if (out_theta_bs) *out_theta_bs = -(s * std::exp(-q * t) * norm_pdf(d1) * v) / (2.0 * sqrt_t)
+                                      - r * k * std::exp(-r * t) * norm_cdf(d2)
+                                      + q * s * std::exp(-q * t) * norm_cdf(d1);
+    if (out_rho_bs)   *out_rho_bs   = k * t * std::exp(-r * t) * norm_cdf(d2);
+}
+
+void greek_surface_grid(
+    double strike, double rate, double vol, double dividend_yield,
+    std::span<const double> spots,
+    std::span<const double> maturities,
+    int greek_code,
+    std::span<double> out_grid
+) {
+    const int n_s = static_cast<int>(spots.size());
+    const int n_t = static_cast<int>(maturities.size());
+    if (n_s == 0 || n_t == 0 || static_cast<int>(out_grid.size()) < n_s * n_t) return;
+    const double k = clamp_positive(strike);
+    const double v = clamp_positive(vol);
+    const double q = dividend_yield;
+    const double r = rate;
+
+#pragma omp parallel for schedule(static)
+    for (int i = 0; i < n_s; ++i) {
+        const double s = clamp_positive(spots[i]);
+        for (int j = 0; j < n_t; ++j) {
+            const double t      = clamp_positive(maturities[j]);
+            const double sqrt_t = std::sqrt(t);
+            const double d1     = (std::log(s / k) + (r - q + 0.5 * v * v) * t) / (v * sqrt_t);
+            const double d2     = d1 - v * sqrt_t;
+            double val = 0.0;
+            switch (greek_code) {
+                case 0: val = std::exp(-q * t) * norm_cdf(d1);                                break; // delta
+                case 1: val = std::exp(-q * t) * norm_pdf(d1) / (s * v * sqrt_t);            break; // gamma
+                case 2: val = s * std::exp(-q * t) * norm_pdf(d1) * sqrt_t;                  break; // vega
+                case 3: val = -(s * std::exp(-q * t) * norm_pdf(d1) * v) / (2.0 * sqrt_t)
+                              - r * k * std::exp(-r * t) * norm_cdf(d2)
+                              + q * s * std::exp(-q * t) * norm_cdf(d1);                      break; // theta
+                case 4: val = k * t * std::exp(-r * t) * norm_cdf(d2);                        break; // rho
+                default: val = 0.0;
+            }
+            out_grid[i * n_t + j] = val;
+        }
+    }
 }
 
 void pricing_error_decomp(

@@ -1,7 +1,7 @@
 """Pricing, scenario, PDE, convergence, and benchmark routes."""
 from time import perf_counter
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from src.schemas.request_models import (
     BenchmarkRequest,
@@ -10,6 +10,7 @@ from src.schemas.request_models import (
     PricingBatchRequest,
     PricingBatchGridRequest,
     PricingRequest,
+    StressLibraryRequest,
 )
 from src.services.engine_client import (
     pde_price,
@@ -20,6 +21,7 @@ from src.services.analytics import (
     convergence_summary,
     rank_benchmark_rows,
 )
+from src.services.stress_library import run_stress_library
 from src.api.shared import _diag, _record, dispatch_task
 
 router = APIRouter(tags=["pricing"])
@@ -116,6 +118,39 @@ def tool_pricing_batch_grid(req: PricingBatchGridRequest) -> dict:
 @router.post("/tool/scenario/run")
 def tool_scenario(req: PricingRequest) -> dict:
     return dispatch_task(req.model_dump(), task_type="scenario", trace_prefix="scenario")
+
+
+@router.post("/tool/stress/run")
+def tool_stress(req: StressLibraryRequest) -> dict:
+    t0 = perf_counter()
+    try:
+        result = run_stress_library(
+            spot=req.spot,
+            strike=req.strike,
+            rate=req.rate,
+            vol=req.vol,
+            maturity=req.maturity,
+            n_paths=req.n_paths,
+            dividend_yield=req.dividend_yield,
+            n_rebalances=req.n_rebalances,
+            hedge_paths=req.hedge_paths,
+            transaction_cost_bps=req.transaction_cost_bps,
+            rebalance_threshold=req.rebalance_threshold,
+            vol_mismatch_mult=req.vol_mismatch_mult,
+            stress_pack=req.stress_pack,
+            stress_severity=req.stress_severity,
+            include_hedge_compare=req.include_hedge_compare,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    ms = (perf_counter() - t0) * 1000.0
+    return _record(
+        tool_name="stress_library",
+        input_params=req.model_dump(),
+        result_summary=result["summary"],
+        result_details=result["details"],
+        diagnostics=_diag(ms, ["stress_library"]),
+    )
 
 
 @router.post("/tool/pde/run")

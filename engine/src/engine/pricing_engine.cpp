@@ -5,6 +5,7 @@
 #include <cmath>
 #include <numeric>
 #include <ranges>
+#include <string>
 #include <vector>
 #include <omp.h>
 
@@ -111,10 +112,15 @@ PricingResult run_pricing(const PricingParams& p) {
         r.mc = r.bs; r.binomial = r.bs;
     } else {
         const double r_eff = p.rate - p.dividend_yield;
-        r.mc      = mc_price_with_stderr(p.spot, p.strike, r_eff, p.vol, p.maturity, p.n_paths, &r.mc_std_err);
-        r.bs      = bs_closed_form_price(p.spot, p.strike, r_eff, p.vol, p.maturity);
-        r.binomial = binomial_price(p.spot, p.strike, r_eff, p.vol, p.maturity, steps);
-        pricing_greeks(p.spot, p.strike, r_eff, p.vol, p.maturity, &r.delta_bs, &r.vega_bs);
+        const bool is_call = (p.product_type != "european_put");
+        SamplerType sampler = SamplerType::Pseudorandom;
+        if (p.mc_sampler == "antithetic") sampler = SamplerType::Antithetic;
+        else if (p.mc_sampler == "sobol") sampler = SamplerType::Sobol;
+        r.mc      = mc_price_with_stderr(p.spot, p.strike, r_eff, p.vol, p.maturity, p.n_paths, &r.mc_std_err, is_call, sampler);
+        r.bs      = bs_closed_form_price(p.spot, p.strike, r_eff, p.vol, p.maturity, is_call);
+        r.binomial = binomial_price(p.spot, p.strike, r_eff, p.vol, p.maturity, steps, is_call);
+        pricing_greeks(p.spot, p.strike, r_eff, p.vol, p.maturity, p.dividend_yield,
+                       &r.delta_bs, &r.gamma_bs, &r.theta_bs, &r.vega_bs, &r.rho_bs);
         pricing_error_decomp(r.mc, r.bs, r.binomial, &r.mc_minus_bs, &r.binomial_minus_bs);
         if (p.is_american) {
             r.american     = binomial_american_price(p.spot, p.strike, r_eff, p.vol, p.maturity, steps, 0.0);
@@ -180,6 +186,104 @@ PricingBatchResult run_pricing_batch_grid(const BatchGridParams& p, double runti
     std::vector<double> out_mc(n), out_bs(n), out_bin(n);
     pricing_batch(spots, strikes, rates, vols, mats, npaths, divs, out_mc, out_bs, out_bin);
     return assemble_batch(spots, strikes, vols, out_mc, out_bs, out_bin, runtime_ms);
+}
+
+MultiLegResult run_multi_leg(const MultiLegParams& p) {
+    const double r_eff = p.rate - p.dividend_yield;
+    const int steps = std::max(10, static_cast<int>(p.maturity * 250.0));
+
+    MultiLegResult r;
+    for (const auto& leg : p.legs) {
+        const bool is_call = (leg.option_type != "put");
+        LegResult lr;
+        lr.option_type = leg.option_type;
+        lr.strike      = leg.strike;
+        lr.quantity    = leg.quantity;
+        lr.bs_price    = bs_closed_form_price(p.spot, leg.strike, r_eff, p.vol, p.maturity, is_call);
+        lr.mc_price    = mc_price_full(p.spot, leg.strike, r_eff, p.vol, p.maturity, p.n_paths, is_call);
+
+        double delta = 0.0, gamma = 0.0, theta = 0.0, vega = 0.0, rho = 0.0;
+        pricing_greeks(p.spot, leg.strike, r_eff, p.vol, p.maturity, p.dividend_yield,
+                       &delta, &gamma, &theta, &vega, &rho);
+        if (!is_call) {
+            // put delta = call delta - exp(-q*T)
+            delta -= std::exp(-p.dividend_yield * p.maturity);
+        }
+        lr.delta_bs = delta;
+        lr.vega_bs  = vega;
+
+        r.net_bs_price += leg.quantity * lr.bs_price;
+        r.net_mc_price += leg.quantity * lr.mc_price;
+        r.net_delta    += leg.quantity * lr.delta_bs;
+        r.net_vega     += leg.quantity * lr.vega_bs;
+        r.legs.push_back(lr);
+    }
+
+    const int n = static_cast<int>(p.legs.size());
+    if (n == 2) {
+        const bool l0_call = (p.legs[0].option_type != "put");
+        const bool l1_call = (p.legs[1].option_type != "put");
+        const double q0 = p.legs[0].quantity, q1 = p.legs[1].quantity;
+        if (l0_call && l1_call && q0 > 0 && q1 < 0)
+            r.strategy_hint = "bull_call_spread";
+        else if (!l0_call && !l1_call && q0 > 0 && q1 < 0)
+            r.strategy_hint = "bear_put_spread";
+        else if (l0_call != l1_call && std::abs(p.legs[0].strike - p.legs[1].strike) < 1e-6)
+            r.strategy_hint = "straddle";
+        else if (l0_call && !l1_call && q0 > 0 && q1 > 0)
+            r.strategy_hint = "strangle";
+        else
+            r.strategy_hint = "custom_2leg";
+    } else if (n == 3) {
+        r.strategy_hint = "butterfly_or_custom";
+    } else if (n > 3) {
+        r.strategy_hint = "condor_or_custom";
+    } else if (n == 1) {
+        r.strategy_hint = p.legs[0].option_type == "put" ? "long_put" : "long_call";
+    }
+
+    return r;
+}
+
+GreekSurfaceResult run_greek_surface(const GreekSurfaceParams& p) {
+    const int ns = std::max(2, std::min(p.n_spots, 50));
+    const int nt = std::max(2, std::min(p.n_mats,  30));
+    const double s_min = std::max(1e-6, p.spot_min);
+    const double s_max = std::max(s_min + 1e-6, p.spot_max);
+    const double m_min = std::max(1e-6, p.mat_min);
+    const double m_max = std::max(m_min + 1e-6, p.mat_max);
+
+    std::vector<double> spots(ns), mats(nt);
+    for (int i = 0; i < ns; ++i)
+        spots[i] = s_min + (s_max - s_min) * i / (ns - 1);
+    for (int j = 0; j < nt; ++j)
+        mats[j]  = m_min + (m_max - m_min) * j / (nt - 1);
+
+    const int greek_code = [&]() -> int {
+        if (p.greek == "gamma") return 1;
+        if (p.greek == "vega")  return 2;
+        if (p.greek == "theta") return 3;
+        if (p.greek == "rho")   return 4;
+        return 0; // delta default
+    }();
+
+    std::vector<double> grid(ns * nt, 0.0);
+    greek_surface_grid(p.strike, p.rate, p.vol, p.dividend_yield,
+                       spots, mats, greek_code, grid);
+
+    GreekSurfaceResult r;
+    r.greek_name = p.greek;
+    r.spots      = spots;
+    r.maturities = mats;
+    r.grid       = grid;
+    r.strike     = p.strike;
+    r.vol        = p.vol;
+    r.rate       = p.rate;
+    if (!grid.empty()) {
+        r.grid_min = *std::ranges::min_element(grid);
+        r.grid_max = *std::ranges::max_element(grid);
+    }
+    return r;
 }
 
 }  // namespace sf

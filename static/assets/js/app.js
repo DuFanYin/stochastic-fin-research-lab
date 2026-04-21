@@ -1,5 +1,8 @@
-import { markRunStart, getDataMode, showErrorToast, initShellControls } from "./ui/core.js";
 import {
+  markRunStart,
+  getDataMode,
+  showErrorToast,
+  initShellControls,
   initSelectButtons,
   initSwitchButtons,
   initModeSwitch,
@@ -8,13 +11,15 @@ import {
   initModeParamSections,
   isPicked,
   setActiveParamGroups,
-} from "./ui/controls.js";
+} from "./ui/core.js";
 import {
   fetchLiveData,
   resolveFromSnapshot,
   applyDataMode,
   runPricingMain,
   runScenario,
+  runIv,
+  runStress,
   runHedge,
   runPde,
   runMeasureMain,
@@ -22,6 +27,11 @@ import {
   runBenchmark,
   runValidationForCompute,
   runValidationOnly,
+  runGreekSurface,
+  runMultiLeg,
+  runCalibration,
+  loadStressPacks,
+  initBurstSliders,
 } from "./page/runners.js";
 
 /* ─── Bootstrap ──────────────────────────────────────────────────────────── */
@@ -31,8 +41,21 @@ initSelectButtons();
 initSwitchButtons();
 initModeParamSections();
 
-initModeSwitch(["pricingModeSingle", "pricingModeBatch"]);
 initModeSwitch(["measureModePQ", "measureModeRN"]);
+
+// Pricing single/batch toggle — also controls batch-only param visibility
+function applyPricingMode(isBatch) {
+  ["pricingModeSingle", "pricingModeBatch"].forEach((id) => {
+    document.getElementById(id)?.classList.toggle("active", id === (isBatch ? "pricingModeBatch" : "pricingModeSingle"));
+  });
+  const batchParams = document.getElementById("batchPricingParams");
+  if (batchParams) {
+    const pricingActive = document.getElementById("runBtnPricing")?.classList.contains("run-active");
+    batchParams.style.display = (isBatch && pricingActive) ? "contents" : "none";
+  }
+}
+document.getElementById("pricingModeSingle")?.addEventListener("click", () => applyPricingMode(false));
+document.getElementById("pricingModeBatch")?.addEventListener("click",  () => applyPricingMode(true));
 
 const validationPickIds = ["pickStats", "pickIto", "pickSimulation"];
 
@@ -92,6 +115,11 @@ document.getElementById("btnFetchLive")?.addEventListener("click", () => {
 const RESULT_SECTIONS = [
   "resultCardPricing",
   "resultCardScenario",
+  "resultCardIv",
+  "resultCardGreekSurface",
+  "resultCardCalibration",
+  "resultCardMultiLeg",
+  "resultCardStress",
   "resultCardHedge",
   "resultCardPde",
   "resultCardMeasure",
@@ -135,6 +163,11 @@ let _activeModeBtnId = null;
 const MODE_RUN_MAP = {
   runBtnPricing:    () => runWithOptionalValidation(runPricingMain,    "resultCardPricing"),
   runBtnScenario:   () => runWithOptionalValidation(runScenario,       "resultCardScenario"),
+  runBtnIv:         () => runWithOptionalValidation(runIv,             "resultCardIv"),
+  runBtnGreekSurface:  () => runWithOptionalValidation(runGreekSurface,  "resultCardGreekSurface"),
+  runBtnCalibration:   () => runWithOptionalValidation(runCalibration,   "resultCardCalibration"),
+  runBtnMultiLeg:      () => runWithOptionalValidation(runMultiLeg,      "resultCardMultiLeg"),
+  runBtnStress:     () => runWithOptionalValidation(runStress,         "resultCardStress"),
   runBtnHedge:      () => runWithOptionalValidation(runHedge,          "resultCardHedge"),
   runBtnPde:        () => runWithOptionalValidation(runPde,            "resultCardPde"),
   runBtnMeasure:    () => runWithOptionalValidation(runMeasureMain,    "resultCardMeasure"),
@@ -156,7 +189,8 @@ document.getElementById("runBtnMain")?.addEventListener("click", () => {
 });
 
 const RUN_MODE_BTN_IDS = [
-  "runBtnPricing", "runBtnScenario", "runBtnHedge", "runBtnPde",
+  "runBtnPricing", "runBtnScenario", "runBtnStress", "runBtnHedge", "runBtnPde",
+  "runBtnIv", "runBtnGreekSurface", "runBtnCalibration", "runBtnMultiLeg",
   "runBtnMeasure", "runBtnConvergence", "runBtnBenchmark", "runBtnValidation",
 ];
 
@@ -164,7 +198,6 @@ function setActiveModeBtn(id) {
   _activeModeBtnId = id;
   RUN_MODE_BTN_IDS.forEach((i) => document.getElementById(i)?.classList.remove("run-active"));
   document.getElementById(id)?.classList.add("run-active");
-  // Update Run button label to reflect active mode
 }
 
 /* ─── Mode buttons: select only, no run ─────────────────────────────────── */
@@ -173,6 +206,10 @@ RUN_MODE_BTN_IDS.forEach((id) => {
   document.getElementById(id)?.addEventListener("click", () => {
     setActiveModeBtn(id);
     setActiveParamGroups(id);
+    // Re-apply after setActiveParamGroups since it overwrites batchPricingParams display
+    const isBatch = document.getElementById("pricingModeBatch")?.classList.contains("active");
+    const batchParams = document.getElementById("batchPricingParams");
+    if (batchParams) batchParams.style.display = (id === "runBtnPricing" && isBatch) ? "contents" : "none";
   });
 });
 
@@ -184,3 +221,10 @@ initParamFlash();
 
 setActiveModeBtn("runBtnPricing");
 setActiveParamGroups("runBtnPricing");
+// Batch params hidden by default (single mode is default)
+applyPricingMode(false);
+
+/* ─── Burst sliders + dynamic stress packs ───────────────────────────────── */
+
+initBurstSliders();
+loadStressPacks().catch(() => {});

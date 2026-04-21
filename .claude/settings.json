@@ -18,7 +18,10 @@
       "Bash(brew info *)",
       "Read(//opt/homebrew/Cellar/nlohmann-json/3.12.0/include/nlohmann/**)",
       "Bash(cmake ..)",
-      "Bash(cmake .. -q)"
+      "Bash(cmake .. -q)",
+      "Bash(./run.sh build *)",
+      "Bash(cmake --build engine/build)",
+      "Bash(cmake --build build --parallel 4)"
     ],
     "additionalDirectories": [
       "/Users/hang/Downloads/Y3S2/stochastic fin/quant-lab/.vscode"

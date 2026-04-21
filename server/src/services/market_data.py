@@ -102,17 +102,17 @@ async def _fetch_iv_for_instrument(name: str) -> float | None:
         return None
 
 
-async def fetch_iv_surface(spot: float) -> dict[str, Any]:
+async def fetch_iv_surface(spot: float, strikes_per_expiry: int = 7) -> dict[str, Any]:
     """
-    Build a compact IV surface: for each available expiry, find the call
-    closest to ATM and fetch its mark IV.
+    Build an IV surface with multiple strikes per expiry so the C++ engine
+    can bilinearly interpolate in both K and T dimensions.
 
     Returns
     -------
     {
       "surface": [
         {"expiry": "27JUN25", "strike": 65000, "years": 0.19, "iv": 0.83, "iv_pct": 83.0},
-        ...
+        ...  # multiple rows per expiry, spread around ATM
       ],
       "raw_instruments_count": 412,
     }
@@ -123,44 +123,104 @@ async def fetch_iv_surface(spot: float) -> dict[str, Any]:
         log.warning("Options instruments failed (%s)", exc)
         return {"surface": [], "raw_instruments_count": 0}
 
-    # Group calls by expiry date string
-    calls_by_expiry: dict[str, list[dict]] = {}
+    # Group calls by expiry, keep all strikes
+    calls_by_expiry: dict[str, dict] = {}
     for inst in instruments:
         if inst.get("option_type") != "call":
             continue
-        expiry = inst.get("expiry_date", "")   # e.g. "27JUN25"
-        if not expiry:
-            expiry = inst["instrument_name"].split("-")[1]
-        calls_by_expiry.setdefault(expiry, []).append(inst)
-
-    # For each expiry, pick the call whose strike is nearest ATM
-    surface_instruments: list[tuple[str, str, float, float]] = []
-    for expiry, calls in sorted(calls_by_expiry.items()):
-        expiry_ts = calls[0].get("expiration_timestamp", 0)
+        expiry = inst.get("expiry_date", "") or inst["instrument_name"].split("-")[1]
+        expiry_ts = inst.get("expiration_timestamp", 0)
         years = _years_to_expiry(expiry_ts) if expiry_ts else 0.0
-        best = min(calls, key=lambda i: abs(i["strike"] - spot))
-        surface_instruments.append((expiry, best["instrument_name"], best["strike"], years))
+        if expiry not in calls_by_expiry:
+            calls_by_expiry[expiry] = {"years": years, "calls": []}
+        calls_by_expiry[expiry]["calls"].append(inst)
 
-    # Fetch IVs concurrently (one per expiry — minimal API load)
-    names = [x[1] for x in surface_instruments]
+    # For each expiry, pick N strikes centered around ATM
+    fetch_tasks: list[tuple[str, float, str]] = []  # (expiry, years, instrument_name)
+    for expiry, info in sorted(calls_by_expiry.items()):
+        years = info["years"]
+        calls_sorted = sorted(info["calls"], key=lambda i: abs(float(i["strike"]) - spot))
+        chosen = calls_sorted[:strikes_per_expiry]
+        for inst in chosen:
+            fetch_tasks.append((expiry, years, inst["instrument_name"], float(inst["strike"])))
+
+    if not fetch_tasks:
+        return {"surface": [], "raw_instruments_count": len(instruments)}
+
+    # Fetch all IVs concurrently
+    names = [t[2] for t in fetch_tasks]
     ivs = await asyncio.gather(*[_fetch_iv_for_instrument(n) for n in names])
 
     surface = []
-    for (expiry, name, strike, years), iv in zip(surface_instruments, ivs):
+    for (expiry, years, name, strike), iv in zip(fetch_tasks, ivs):
         if iv is None:
             continue
         surface.append({
-            "expiry":   expiry,
+            "expiry":     expiry,
             "instrument": name,
-            "strike":   strike,
-            "years":    round(years, 4),
-            "iv":       round(iv, 4),
-            "iv_pct":   round(iv * 100, 2),
+            "strike":     strike,
+            "years":      round(years, 4),
+            "iv":         round(iv, 4),
+            "iv_pct":     round(iv * 100, 2),
         })
 
     return {
         "surface": surface,
         "raw_instruments_count": len(instruments),
+    }
+
+
+async def fetch_iv_smile_slice(spot: float, target_years: float, center_strike: float, n_points: int = 11) -> dict[str, Any]:
+    """
+    Build a same-expiry strike slice (smile proxy) near target maturity.
+    Returns rows sorted by strike with mark IV values.
+    """
+    try:
+        instruments = await _fetch_options_instruments()
+    except Exception as exc:
+        log.warning("Options instruments failed for smile slice (%s)", exc)
+        return {"rows": [], "selected_expiry": "", "selected_years": 0.0}
+
+    calls: list[dict[str, Any]] = [i for i in instruments if i.get("option_type") == "call"]
+    if not calls:
+        return {"rows": [], "selected_expiry": "", "selected_years": 0.0}
+
+    expiry_rows: dict[str, dict[str, Any]] = {}
+    for inst in calls:
+        expiry = inst.get("expiry_date") or inst.get("instrument_name", "").split("-")[1]
+        expiry_ts = inst.get("expiration_timestamp", 0)
+        years = _years_to_expiry(expiry_ts) if expiry_ts else 0.0
+        if expiry not in expiry_rows:
+            expiry_rows[expiry] = {"years": years, "calls": []}
+        expiry_rows[expiry]["calls"].append(inst)
+
+    selected_expiry = min(expiry_rows.keys(), key=lambda e: abs(expiry_rows[e]["years"] - target_years))
+    selected_years = float(expiry_rows[selected_expiry]["years"])
+    selected_calls = sorted(expiry_rows[selected_expiry]["calls"], key=lambda i: abs(float(i["strike"]) - center_strike))
+    pick_n = max(5, min(n_points, len(selected_calls)))
+    chosen = selected_calls[:pick_n]
+    chosen = sorted(chosen, key=lambda i: float(i["strike"]))
+
+    names = [c["instrument_name"] for c in chosen]
+    ivs = await asyncio.gather(*[_fetch_iv_for_instrument(n) for n in names])
+    rows = []
+    for inst, iv in zip(chosen, ivs):
+        if iv is None:
+            continue
+        rows.append(
+            {
+                "instrument": inst["instrument_name"],
+                "strike": float(inst["strike"]),
+                "years": round(selected_years, 4),
+                "log_moneyness": round(math.log(max(float(inst["strike"]), 1e-8) / max(spot, 1e-8)), 6),
+                "iv": round(iv, 6),
+                "iv_pct": round(iv * 100, 3),
+            }
+        )
+    return {
+        "rows": rows,
+        "selected_expiry": selected_expiry,
+        "selected_years": round(selected_years, 4),
     }
 
 

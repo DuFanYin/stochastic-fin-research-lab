@@ -13,6 +13,7 @@ class PricingRequest(BaseModel):
     fx_mode: bool = False
     numeraire: str = "money_market"
     is_american: bool = False
+    mc_sampler: str = "pseudorandom"  # "pseudorandom" | "antithetic" | "sobol"
 
 
 class PricingBatchRequest(BaseModel):
@@ -156,4 +157,97 @@ class ValidationGateRequest(BaseModel):
 
     batch_jobs: int = Field(7, ge=1, le=500)
     batch_spot_shock: float = Field(0.02, ge=0.0, le=1.0)
+
+
+class GreekSurfaceRequest(BaseModel):
+    strike: float = Field(..., gt=0)
+    rate: float = Field(..., ge=-1.0, le=1.0)
+    vol: float = Field(..., gt=0, le=5.0)
+    dividend_yield: float = Field(0.0, ge=-1.0, le=1.0)
+    spot_min: float = Field(..., gt=0)
+    spot_max: float = Field(..., gt=0)
+    mat_min: float = Field(0.1, gt=0, le=100.0)
+    mat_max: float = Field(3.0, gt=0, le=100.0)
+    n_spots: int = Field(21, ge=5, le=50)
+    n_mats: int = Field(11, ge=5, le=30)
+    greek: str = "delta"
+
+
+class ImpliedVolRequest(BaseModel):
+    market_price: float = Field(..., gt=0)
+    spot: float = Field(..., gt=0)
+    strike: float = Field(..., gt=0)
+    rate: float = Field(..., ge=-1.0, le=1.0)
+    maturity: float = Field(..., gt=0, le=100.0)
+    dividend_yield: float = Field(0.0, ge=-1.0, le=1.0)
+
+
+class ImpliedVolBatchRequest(BaseModel):
+    market_prices: list[float] = Field(..., min_length=1, max_length=500)
+    strikes: list[float] = Field(..., min_length=1, max_length=500)
+    expiries: list[float] = Field(..., min_length=1, max_length=500)
+    spot: float = Field(..., gt=0)
+    rate: float = Field(..., ge=-1.0, le=1.0)
+    dividend_yield: float = Field(0.0, ge=-1.0, le=1.0)
+
+
+class HestonPriceRequest(BaseModel):
+    spot: float = Field(..., gt=0)
+    strike: float = Field(..., gt=0)
+    rate: float = Field(..., ge=-1.0, le=1.0)
+    maturity: float = Field(..., gt=0, le=100.0)
+    v0: float = Field(0.04, gt=0)
+    kappa: float = Field(1.5, gt=0)
+    theta: float = Field(0.04, gt=0)
+    xi: float = Field(0.5, gt=0)
+    rho: float = Field(-0.7, ge=-1.0, le=1.0)
+
+
+class HestonCalibrateRequest(BaseModel):
+    spot: float = Field(..., gt=0)
+    rate: float = Field(..., ge=-1.0, le=1.0)
+    dividend_yield: float = Field(0.0, ge=-1.0, le=1.0)
+    market_strikes: list[float] = Field(..., min_length=2, max_length=200)
+    market_maturities: list[float] = Field(..., min_length=2, max_length=200)
+    market_prices: list[float] = Field(..., min_length=2, max_length=200)
+    init_v0: float = Field(0.04, gt=0)
+    init_kappa: float = Field(1.5, gt=0)
+    init_theta: float = Field(0.04, gt=0)
+    init_xi: float = Field(0.5, gt=0)
+    init_rho: float = Field(-0.7, ge=-1.0, le=1.0)
+    max_iter: int = Field(500, ge=50, le=5000)
+
+
+class LegSpecRequest(BaseModel):
+    option_type: str = "call"    # "call" | "put"
+    strike: float = Field(..., gt=0)
+    quantity: float = Field(1.0, ge=-100.0, le=100.0)
+
+
+class MultiLegRequest(BaseModel):
+    spot: float = Field(..., gt=0)
+    rate: float = Field(..., ge=-1.0, le=1.0)
+    vol: float = Field(..., gt=0, le=5.0)
+    maturity: float = Field(..., gt=0, le=100.0)
+    dividend_yield: float = Field(0.0, ge=-1.0, le=1.0)
+    n_paths: int = Field(10000, ge=100, le=20_000_000)
+    legs: list[LegSpecRequest] = Field(..., min_length=1, max_length=10)
+
+
+class StressLibraryRequest(BaseModel):
+    spot: float = Field(..., gt=0)
+    strike: float = Field(..., gt=0)
+    rate: float = Field(..., ge=-1.0, le=1.0)
+    vol: float = Field(..., gt=0, le=5.0)
+    maturity: float = Field(..., gt=0, le=100.0)
+    n_paths: int = Field(10000, ge=100, le=20_000_000)
+    dividend_yield: float = Field(0.0, ge=-1.0, le=1.0)
+    n_rebalances: int = Field(52, ge=1, le=10_000)
+    hedge_paths: int = Field(1000, ge=50, le=200_000)
+    transaction_cost_bps: float = Field(5.0, ge=0.0, le=1000.0)
+    rebalance_threshold: float = Field(0.02, ge=0.0, le=1.0)
+    vol_mismatch_mult: float = Field(1.15, ge=0.1, le=5.0)
+    stress_pack: str = "core4"
+    stress_severity: str = "moderate"
+    include_hedge_compare: bool = True
 

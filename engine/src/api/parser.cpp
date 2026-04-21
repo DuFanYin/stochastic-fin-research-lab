@@ -122,7 +122,8 @@ PricingParams parse_pricing_params(const json& j) {
         jv<double>(j, "vol", 0.0), jv<double>(j, "maturity", 0.0), jv<double>(j, "dividend_yield", 0.0),
         jv<int>(j, "n_paths", 10000), jv<int>(j, "n_steps", 0), jv<bool>(j, "is_american", false),
         jv<bool>(j, "fx_mode", false), jv<std::string>(j, "product_type", "european_call"),
-        jv<std::string>(j, "numeraire", "money_market")
+        jv<std::string>(j, "numeraire", "money_market"),
+        jv<std::string>(j, "mc_sampler", "pseudorandom")
     };
 }
 
@@ -215,7 +216,9 @@ std::string ser_pricing(const std::string& tid, const PricingResult& r, double m
         {"american",   r.has_american ? json(r.american) : json(nullptr)},
         {"method_spread", r.spread}, {"relative_spread", r.rel_spread},
         {"pricing_stability", r.stability}, {"numeraire", r.numeraire},
-        {"greeks", {{"delta_bs", r.delta_bs}, {"vega_bs", r.vega_bs}}},
+        {"greeks", {{"delta_bs", r.delta_bs}, {"gamma_bs", r.gamma_bs},
+                    {"theta_bs", r.theta_bs}, {"vega_bs",  r.vega_bs},
+                    {"rho_bs",   r.rho_bs}}},
         {"error_decomposition", {{"mc_minus_bs", r.mc_minus_bs},
                                   {"binomial_minus_bs", r.binomial_minus_bs}}},
         {"abs_mc_bs", std::abs(r.mc_minus_bs)},
@@ -480,6 +483,211 @@ std::string run_pde_json(const std::string& src, double t0_ms) {
     jj["result_summary"] = {{"price",r.price},{"method",r.method},
                               {"s_steps",r.s_steps},{"t_steps",r.t_steps}};
     jj["diagnostics"] = diag_block(elapsed_ms(t0_ms), "pde");
+    return jj.dump();
+}
+
+std::string run_greek_surface_json(const std::string& src, double t0_ms) {
+    const auto ctx = prepare_request(src, {"strike", "rate", "vol", "spot_min", "spot_max"},
+                                     "missing_required_greek_surface_fields");
+    if (!ctx) return ctx.error();
+    const auto& j = ctx->body;
+    GreekSurfaceParams p;
+    p.strike         = jv<double>(j, "strike",         0.0);
+    p.rate           = jv<double>(j, "rate",           0.0);
+    p.vol            = jv<double>(j, "vol",            0.2);
+    p.dividend_yield = jv<double>(j, "dividend_yield", 0.0);
+    p.spot_min       = jv<double>(j, "spot_min",       0.0);
+    p.spot_max       = jv<double>(j, "spot_max",       0.0);
+    p.mat_min        = jv<double>(j, "mat_min",        0.1);
+    p.mat_max        = jv<double>(j, "mat_max",        3.0);
+    p.n_spots        = jv<int>   (j, "n_spots",        21);
+    p.n_mats         = jv<int>   (j, "n_mats",         11);
+    p.greek          = jv<std::string>(j, "greek",     "delta");
+    const auto r     = run_greek_surface(p);
+    json jj = base_envelope(ctx->trace_id);
+    jj["result_summary"] = {
+        {"greek",      r.greek_name},
+        {"n_spots",    (int)r.spots.size()},
+        {"n_mats",     (int)r.maturities.size()},
+        {"grid_min",   r.grid_min},
+        {"grid_max",   r.grid_max},
+        {"strike",     r.strike},
+        {"vol",        r.vol},
+        {"rate",       r.rate},
+    };
+    jj["result_details"] = {
+        {"spots",      r.spots},
+        {"maturities", r.maturities},
+        {"grid",       r.grid},
+    };
+    jj["diagnostics"] = diag_block(elapsed_ms(t0_ms), "greek_surface");
+    return jj.dump();
+}
+
+std::string run_multi_leg_json(const std::string& src, double t0_ms) {
+    const auto ctx = prepare_request(src, {"spot", "rate", "vol", "maturity", "legs"},
+                                     "missing_required_multi_leg_fields");
+    if (!ctx) return ctx.error();
+    const auto& j = ctx->body;
+    MultiLegParams p;
+    p.spot           = jv<double>(j, "spot",           0.0);
+    p.rate           = jv<double>(j, "rate",           0.0);
+    p.vol            = jv<double>(j, "vol",            0.2);
+    p.maturity       = jv<double>(j, "maturity",       1.0);
+    p.dividend_yield = jv<double>(j, "dividend_yield", 0.0);
+    p.n_paths        = jv<int>   (j, "n_paths",        10000);
+    if (j.contains("legs") && j["legs"].is_array()) {
+        for (const auto& leg : j["legs"]) {
+            LegSpec ls;
+            ls.option_type = jv<std::string>(leg, "option_type", "call");
+            ls.strike      = jv<double>(leg, "strike", p.spot);
+            ls.quantity    = jv<double>(leg, "quantity", 1.0);
+            p.legs.push_back(ls);
+        }
+    }
+    if (p.legs.empty()) return err_response(ctx->trace_id, "legs_array_empty");
+    const auto r = run_multi_leg(p);
+    json legs_arr = json::array();
+    for (const auto& lr : r.legs) {
+        legs_arr.push_back({
+            {"option_type", lr.option_type}, {"strike", lr.strike}, {"quantity", lr.quantity},
+            {"bs_price", lr.bs_price}, {"mc_price", lr.mc_price},
+            {"delta_bs", lr.delta_bs}, {"vega_bs", lr.vega_bs},
+        });
+    }
+    json jj = base_envelope(ctx->trace_id);
+    jj["result_summary"] = {
+        {"net_bs_price",  r.net_bs_price},
+        {"net_mc_price",  r.net_mc_price},
+        {"net_delta",     r.net_delta},
+        {"net_vega",      r.net_vega},
+        {"strategy_hint", r.strategy_hint},
+        {"n_legs",        (int)r.legs.size()},
+    };
+    jj["result_details"] = {{"legs", legs_arr}};
+    jj["diagnostics"] = diag_block(elapsed_ms(t0_ms), "multi_leg");
+    return jj.dump();
+}
+
+std::string run_implied_vol_json(const std::string& src, double t0_ms) {
+    const auto ctx = prepare_request(src,
+        {"market_price", "spot", "strike", "rate", "maturity"},
+        "missing_required_implied_vol_fields");
+    if (!ctx) return ctx.error();
+    const auto& j = ctx->body;
+    ImpliedVolParams p;
+    p.market_price   = jv<double>(j, "market_price",   0.0);
+    p.spot           = jv<double>(j, "spot",           0.0);
+    p.strike         = jv<double>(j, "strike",         0.0);
+    p.rate           = jv<double>(j, "rate",           0.0);
+    p.maturity       = jv<double>(j, "maturity",       1.0);
+    p.dividend_yield = jv<double>(j, "dividend_yield", 0.0);
+    const auto r = run_implied_vol(p);
+    json jj = base_envelope(ctx->trace_id);
+    jj["result_summary"] = {
+        {"implied_vol",  r.implied_vol},
+        {"converged",    r.converged},
+        {"final_error",  r.final_error},
+    };
+    jj["diagnostics"] = diag_block(elapsed_ms(t0_ms), "implied_vol");
+    return jj.dump();
+}
+
+std::string run_implied_vol_batch_json(const std::string& src, double t0_ms) {
+    const auto ctx = prepare_request(src, {"spot", "rate"},
+                                     "missing_required_implied_vol_batch_fields");
+    if (!ctx) return ctx.error();
+    const auto& j = ctx->body;
+    ImpliedVolBatchParams p;
+    p.spot           = jv<double>(j, "spot",           0.0);
+    p.rate           = jv<double>(j, "rate",           0.0);
+    p.dividend_yield = jv<double>(j, "dividend_yield", 0.0);
+    for (const std::string arr : {"market_prices", "strikes", "expiries"}) {
+        if (!j.contains(arr) || !j[arr].is_array())
+            return err_response(ctx->trace_id, "missing_array_" + arr);
+    }
+    p.market_prices = j["market_prices"].get<std::vector<double>>();
+    p.strikes       = j["strikes"].get<std::vector<double>>();
+    p.expiries      = j["expiries"].get<std::vector<double>>();
+    if (p.market_prices.size() != p.strikes.size() || p.strikes.size() != p.expiries.size())
+        return err_response(ctx->trace_id, "array_length_mismatch");
+    const auto r = run_implied_vol_batch(p);
+    json ivs_arr = r.ivs;
+    json conv_arr = json::array();
+    for (uint8_t c : r.converged) conv_arr.push_back(static_cast<bool>(c));
+    json jj = base_envelope(ctx->trace_id);
+    jj["result_summary"] = {
+        {"n_points",    (int)r.ivs.size()},
+        {"n_converged", r.n_converged},
+        {"convergence_rate", r.ivs.empty() ? 0.0
+            : static_cast<double>(r.n_converged) / r.ivs.size()},
+    };
+    jj["result_details"] = {{"ivs", ivs_arr}, {"converged", conv_arr}};
+    jj["diagnostics"] = diag_block(elapsed_ms(t0_ms), "implied_vol_batch");
+    return jj.dump();
+}
+
+std::string run_heston_price_json(const std::string& src, double t0_ms) {
+    const auto ctx = prepare_request(src, {"spot", "strike", "rate", "maturity"},
+                                     "missing_required_heston_price_fields");
+    if (!ctx) return ctx.error();
+    const auto& j = ctx->body;
+    HestonPriceParams p;
+    p.spot    = jv<double>(j, "spot",    0.0);
+    p.strike  = jv<double>(j, "strike",  0.0);
+    p.rate    = jv<double>(j, "rate",    0.0);
+    p.maturity = jv<double>(j, "maturity", 1.0);
+    p.v0     = jv<double>(j, "v0",    0.04);
+    p.kappa  = jv<double>(j, "kappa", 1.5);
+    p.theta  = jv<double>(j, "theta", 0.04);
+    p.xi     = jv<double>(j, "xi",    0.5);
+    p.rho    = jv<double>(j, "rho",   -0.7);
+    const double price = run_heston_price(p);
+    json jj = base_envelope(ctx->trace_id);
+    jj["result_summary"] = {{"heston_price", price}};
+    jj["diagnostics"] = diag_block(elapsed_ms(t0_ms), "heston_price");
+    return jj.dump();
+}
+
+std::string run_heston_calibrate_json(const std::string& src, double t0_ms) {
+    const auto ctx = prepare_request(src, {"spot", "rate"},
+                                     "missing_required_heston_calibrate_fields");
+    if (!ctx) return ctx.error();
+    const auto& j = ctx->body;
+    HestonCalibrationParams p;
+    p.spot           = jv<double>(j, "spot",           0.0);
+    p.rate           = jv<double>(j, "rate",           0.0);
+    p.dividend_yield = jv<double>(j, "dividend_yield", 0.0);
+    p.init_v0    = jv<double>(j, "init_v0",    0.04);
+    p.init_kappa = jv<double>(j, "init_kappa", 1.5);
+    p.init_theta = jv<double>(j, "init_theta", 0.04);
+    p.init_xi    = jv<double>(j, "init_xi",    0.5);
+    p.init_rho   = jv<double>(j, "init_rho",   -0.7);
+    p.max_iter   = jv<int>   (j, "max_iter",   500);
+    for (const std::string arr : {"market_strikes", "market_maturities", "market_prices"}) {
+        if (!j.contains(arr) || !j[arr].is_array())
+            return err_response(ctx->trace_id, "missing_array_" + arr);
+    }
+    p.market_strikes    = j["market_strikes"].get<std::vector<double>>();
+    p.market_maturities = j["market_maturities"].get<std::vector<double>>();
+    p.market_prices     = j["market_prices"].get<std::vector<double>>();
+    if (p.market_prices.empty())
+        return err_response(ctx->trace_id, "calibration_data_empty");
+    const auto r = run_heston_calibrate(p);
+    json jj = base_envelope(ctx->trace_id);
+    jj["result_summary"] = {
+        {"v0",           r.v0},    {"kappa",        r.kappa},
+        {"theta",        r.theta}, {"xi",           r.xi},
+        {"rho",          r.rho},   {"rmse",         r.rmse},
+        {"max_abs_error", r.max_abs_error},
+        {"iterations",   r.iterations},
+        {"converged",    r.converged},
+    };
+    jj["result_details"] = {
+        {"model_prices", r.model_prices},
+        {"residuals",    r.residuals},
+    };
+    jj["diagnostics"] = diag_block(elapsed_ms(t0_ms), "heston_calibrate");
     return jj.dump();
 }
 

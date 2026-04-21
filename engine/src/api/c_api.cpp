@@ -23,6 +23,12 @@ std::string run_measure_density_json(const std::string& request_json, double t0_
 std::string run_measure_compare_json(const std::string& request_json, double t0_ms);
 std::string run_pde_json(const std::string& request_json, double t0_ms);
 std::string run_vol_surface_json(const std::string& request_json, double t0_ms);
+std::string run_greek_surface_json(const std::string& request_json, double t0_ms);
+std::string run_multi_leg_json(const std::string& request_json, double t0_ms);
+std::string run_implied_vol_json(const std::string& request_json, double t0_ms);
+std::string run_implied_vol_batch_json(const std::string& request_json, double t0_ms);
+std::string run_heston_calibrate_json(const std::string& request_json, double t0_ms);
+std::string run_heston_price_json(const std::string& request_json, double t0_ms);
 }  // namespace sf
 
 namespace {
@@ -117,6 +123,36 @@ int sf_run_pde_json(const char* request_json, char* out_response_json, int out_c
 int sf_run_vol_surface_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
     if (!request_json) return 2;
     return copy_response_to_buffer(sf::run_vol_surface_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
+}
+
+int sf_run_greek_surface_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
+    if (!request_json) return 2;
+    return copy_response_to_buffer(sf::run_greek_surface_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
+}
+
+int sf_run_multi_leg_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
+    if (!request_json) return 2;
+    return copy_response_to_buffer(sf::run_multi_leg_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
+}
+
+int sf_run_implied_vol_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
+    if (!request_json) return 2;
+    return copy_response_to_buffer(sf::run_implied_vol_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
+}
+
+int sf_run_implied_vol_batch_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
+    if (!request_json) return 2;
+    return copy_response_to_buffer(sf::run_implied_vol_batch_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
+}
+
+int sf_run_heston_calibrate_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
+    if (!request_json) return 2;
+    return copy_response_to_buffer(sf::run_heston_calibrate_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
+}
+
+int sf_run_heston_price_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
+    if (!request_json) return 2;
+    return copy_response_to_buffer(sf::run_heston_price_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
 }
 
 void sf_set_num_threads(int n_threads) {
