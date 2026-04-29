@@ -768,11 +768,190 @@ export function thresholdCompareChart(rows, opts = {}) {
   return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" class="sparkline">${bars}</svg>`;
 }
 
+let _barId = 0;
+
+export function horizontalBarChart(rows, labelKey, valueKey, opts = {}) {
+  if (!rows?.length) return "";
+  const id = `bar-${++_barId}`;
+  const padL = 110, padR = 60, padT = 12, padB = 28;
+  const h = rows.length * 28 + 40;
+  requestAnimationFrame(() => {
+    const canvas = document.getElementById(id);
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.offsetWidth || 480;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.height = h + "px";
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    const innerW = w - padL - padR;
+    const innerH = h - padT - padB;
+    const values = rows.map((r) => num(r[valueKey]));
+    const maxAbs = Math.max(...values.map((v) => Math.abs(v)), 1e-12);
+    const nGrid = 4;
+    for (let i = 0; i <= nGrid; i++) {
+      const x = padL + (i / nGrid) * innerW;
+      ctx.strokeStyle = "rgba(120,120,120,0.15)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + innerH); ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(120,120,120,0.4)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + innerH); ctx.stroke();
+    rows.forEach((row, i) => {
+      const v = num(row[valueKey]);
+      const barH = 16;
+      const slotY = padT + i * 28;
+      const barY = slotY + (28 - barH) / 2;
+      const bw = (Math.abs(v) / maxAbs) * innerW;
+      const barX = v >= 0 ? padL : padL - bw;
+      ctx.fillStyle = v >= 0 ? "#6aaa8a" : "#b06060";
+      ctx.fillRect(barX, barY, bw, barH);
+      const label = String(row[labelKey] || "").slice(0, 18);
+      ctx.fillStyle = "#9ca3af";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "right";
+      ctx.fillText(label, padL - 6, barY + barH / 2 + 3);
+      const valStr = fmtTick(v);
+      ctx.fillStyle = "#d1d5db";
+      ctx.font = "9px monospace";
+      if (v >= 0) {
+        ctx.textAlign = "left";
+        ctx.fillText(valStr, padL + bw + 4, barY + barH / 2 + 3);
+      } else {
+        ctx.textAlign = "right";
+        ctx.fillText(valStr, padL - bw - 4, barY + barH / 2 + 3);
+      }
+    });
+    ctx.fillStyle = "#6b7280";
+    ctx.font = "10px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(valueKey, padL + innerW / 2, h - 6);
+  });
+  return `<canvas id="${id}" class="chart-canvas" style="width:100%;height:${h}px;"></canvas>`;
+}
+
+let _residId = 0;
+
+export function residualBarChart(modelPrices, residuals, opts = {}) {
+  if (!modelPrices?.length) return "";
+  const id = `resid-${++_residId}`;
+  const padL = 40, padR = 10, padT = 16, padB = 28;
+  const w = opts.w ?? 480;
+  const h = opts.h ?? 140;
+  requestAnimationFrame(() => {
+    const canvas = document.getElementById(id);
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cw = canvas.offsetWidth || w;
+    canvas.width = cw * dpr;
+    canvas.height = h * dpr;
+    canvas.style.height = h + "px";
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    const innerW = cw - padL - padR;
+    const innerH = h - padT - padB;
+    const n = modelPrices.length;
+    const maxP = Math.max(...modelPrices.map((v) => Math.abs(num(v))), 1e-12);
+    const maxR = Math.max(...residuals.map((v) => Math.abs(num(v))), 1e-12);
+    const barW = (innerW / n) * 0.4;
+    const baseline = padT + innerH * 0.7;
+    ctx.strokeStyle = "rgba(180,180,180,0.3)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, baseline); ctx.lineTo(padL + innerW, baseline); ctx.stroke();
+    for (let i = 0; i < n; i++) {
+      const p = num(modelPrices[i]);
+      const ph = (Math.abs(p) / maxP) * innerH * 0.7;
+      const px = padL + (i / n) * innerW + (innerW / n) * 0.05;
+      ctx.fillStyle = "rgba(120,120,140,0.7)";
+      ctx.fillRect(px, padT + innerH * 0.7 - ph, barW, ph);
+      const r = num(residuals[i]);
+      const rh = (Math.abs(r) / maxR) * innerH * 0.3;
+      const rx = px + barW;
+      ctx.fillStyle = r > 0 ? "rgba(220,100,80,0.8)" : "rgba(80,120,200,0.8)";
+      const ry = r > 0 ? baseline - rh : baseline;
+      ctx.fillRect(rx, ry, barW, rh);
+      if (i % 2 === 0) {
+        ctx.fillStyle = "#6b7280";
+        ctx.font = "9px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(String(i + 1), padL + (i / n) * innerW + (innerW / n) / 2, padT + innerH + 14);
+      }
+    }
+  });
+  return `<canvas id="${id}" class="chart-canvas" style="width:100%;height:${h}px;"></canvas>`;
+}
+
+let _rankId = 0;
+
+export function rankingBarChart(rows, labelKey, valueKey, opts = {}) {
+  if (!rows?.length) return "";
+  const id = `rank-${++_rankId}`;
+  const padL = 110, padR = 60, padT = 12, padB = 28;
+  const h = rows.length * 28 + 40;
+  requestAnimationFrame(() => {
+    const canvas = document.getElementById(id);
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.offsetWidth || 480;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.height = h + "px";
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    const innerW = w - padL - padR;
+    const innerH = h - padT - padB;
+    const values = rows.map((r) => Math.abs(num(r[valueKey])));
+    const maxAbs = Math.max(...values, 1e-12);
+    const nGrid = 4;
+    for (let i = 0; i <= nGrid; i++) {
+      const x = padL + (i / nGrid) * innerW;
+      ctx.strokeStyle = "rgba(120,120,120,0.15)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + innerH); ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(120,120,120,0.4)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + innerH); ctx.stroke();
+    const n = rows.length;
+    rows.forEach((row, i) => {
+      const v = values[i];
+      const t = n > 1 ? i / (n - 1) : 0;
+      const r1 = 0x4a, g1 = 0x4a, b1 = 0x5a;
+      const r2 = 0xc0, g2 = 0x60, b2 = 0x60;
+      const ri = Math.round(r1 + (r2 - r1) * t);
+      const gi = Math.round(g1 + (g2 - g1) * t);
+      const bi = Math.round(b1 + (b2 - b1) * t);
+      const barH = 16;
+      const slotY = padT + i * 28;
+      const barY = slotY + (28 - barH) / 2;
+      const bw = (v / maxAbs) * innerW;
+      ctx.fillStyle = `rgb(${ri},${gi},${bi})`;
+      ctx.fillRect(padL, barY, bw, barH);
+      const label = String(row[labelKey] || "").slice(0, 18);
+      ctx.fillStyle = "#9ca3af";
+      ctx.font = "10px monospace";
+      ctx.textAlign = "right";
+      ctx.fillText(label, padL - 6, barY + barH / 2 + 3);
+      ctx.fillStyle = "#d1d5db";
+      ctx.font = "9px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(fmtTick(v), padL + bw + 4, barY + barH / 2 + 3);
+    });
+    ctx.fillStyle = "#6b7280";
+    ctx.font = "10px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(valueKey, padL + innerW / 2, h - 6);
+  });
+  return `<canvas id="${id}" class="chart-canvas" style="width:100%;height:${h}px;"></canvas>`;
+}
+
 export function efficiencyFrontierChart(canvas, strategies, opts = {}) {
-  if (!canvas || !strategies?.length) return;
+  if (!canvas || !strategies || !strategies.length) return;
   const dpr = window.devicePixelRatio || 1;
-  const w = opts.w ?? canvas.offsetWidth || 480;
-  const h = opts.h ?? 220;
+  const w = opts.w != null ? opts.w : (canvas.offsetWidth || 480);
+  const h = opts.h != null ? opts.h : 220;
   canvas.width = w * dpr;
   canvas.height = h * dpr;
   canvas.style.width = w + "px";

@@ -17,19 +17,11 @@ import {
   resolveFromSnapshot,
   applyDataMode,
   runPricingMain,
-  runScenario,
-  runIv,
   runStress,
-  runHedge,
-  runPde,
-  runMeasureMain,
-  runConvergence,
   runBenchmark,
   runValidationForCompute,
   runValidationOnly,
-  runGreekSurface,
   runMultiLeg,
-  runCalibration,
   loadStressPacks,
   initBurstSliders,
 } from "./page/runners.js";
@@ -114,16 +106,8 @@ document.getElementById("btnFetchLive")?.addEventListener("click", () => {
 
 const RESULT_SECTIONS = [
   "resultCardPricing",
-  "resultCardScenario",
-  "resultCardIv",
-  "resultCardGreekSurface",
-  "resultCardCalibration",
   "resultCardMultiLeg",
   "resultCardStress",
-  "resultCardHedge",
-  "resultCardPde",
-  "resultCardMeasure",
-  "resultCardConvergence",
   "resultCardBenchmark",
   "resultCardValidation",
 ];
@@ -162,16 +146,8 @@ let _activeModeBtnId = null;
 
 const MODE_RUN_MAP = {
   runBtnPricing:    () => runWithOptionalValidation(runPricingMain,    "resultCardPricing"),
-  runBtnScenario:   () => runWithOptionalValidation(runScenario,       "resultCardScenario"),
-  runBtnIv:         () => runWithOptionalValidation(runIv,             "resultCardIv"),
-  runBtnGreekSurface:  () => runWithOptionalValidation(runGreekSurface,  "resultCardGreekSurface"),
-  runBtnCalibration:   () => runWithOptionalValidation(runCalibration,   "resultCardCalibration"),
   runBtnMultiLeg:      () => runWithOptionalValidation(runMultiLeg,      "resultCardMultiLeg"),
   runBtnStress:     () => runWithOptionalValidation(runStress,         "resultCardStress"),
-  runBtnHedge:      () => runWithOptionalValidation(runHedge,          "resultCardHedge"),
-  runBtnPde:        () => runWithOptionalValidation(runPde,            "resultCardPde"),
-  runBtnMeasure:    () => runWithOptionalValidation(runMeasureMain,    "resultCardMeasure"),
-  runBtnConvergence:() => runWithOptionalValidation(runConvergence,    "resultCardConvergence"),
   runBtnBenchmark:  () => runWithOptionalValidation(runBenchmark,      "resultCardBenchmark"),
   runBtnValidation: async () => {
     markRunStart();
@@ -189,9 +165,8 @@ document.getElementById("runBtnMain")?.addEventListener("click", () => {
 });
 
 const RUN_MODE_BTN_IDS = [
-  "runBtnPricing", "runBtnScenario", "runBtnStress", "runBtnHedge", "runBtnPde",
-  "runBtnIv", "runBtnGreekSurface", "runBtnCalibration", "runBtnMultiLeg",
-  "runBtnMeasure", "runBtnConvergence", "runBtnBenchmark", "runBtnValidation",
+  "runBtnPricing", "runBtnStress", "runBtnMultiLeg",
+  "runBtnBenchmark", "runBtnValidation",
 ];
 
 function setActiveModeBtn(id) {

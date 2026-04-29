@@ -345,6 +345,7 @@ export {
   renderValidation,
   renderKv,
   renderGreekSurface,
+  renderAllGreeks,
   renderMultiLeg,
   renderCalibration,
 } from "./renderers.js";

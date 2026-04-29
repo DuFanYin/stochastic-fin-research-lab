@@ -5,9 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Quantitative Stochastic Finance Lab</title>
   <link rel="stylesheet" href="assets/css/tokens.css">
-  <link rel="stylesheet" href="assets/css/base.css">
-  <link rel="stylesheet" href="assets/css/layout.css">
-  <link rel="stylesheet" href="assets/css/components.css">
+  <link rel="stylesheet" href="assets/css/app.css">
+  <link rel="stylesheet" href="assets/css/ui.css">
 </head>
 <body>
   <header class="app-header">
@@ -103,14 +102,21 @@
               <span class="live-info-line" id="fundingLine2">source  —</span>
             </div>
 
-            <div class="mode-params" data-modes="runBtnPricing,runBtnScenario,runBtnStress,runBtnIv">
+            <div class="mode-params" data-modes="runBtnPricing,runBtnIv,runBtnStress,runBtnBenchmark">
               <div class="param-group-label">Pricing</div>
               <div class="field"><label>MC paths</label><input id="nPaths" type="number" value="20000"></div>
               <div class="field param-full">
-                <label title="Product Type">Product Type</label>
-                <div id="productType" class="select-buttons">
-                  <button type="button" class="select-btn active" data-value="european_call">European Call</button>
-                  <button type="button" class="select-btn" data-value="digital_call">Digital Call</button>
+                <label>Option Type</label>
+                <div id="optionType" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="call">Call</button>
+                  <button type="button" class="select-btn" data-value="put">Put</button>
+                </div>
+              </div>
+              <div class="field param-full">
+                <label>Exercise</label>
+                <div id="exerciseStyle" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="european">European</button>
+                  <button type="button" class="select-btn" data-value="american">American</button>
                 </div>
               </div>
               <div class="field param-full">
@@ -123,10 +129,6 @@
               <div class="field">
                 <label>FX Mode</label>
                 <button type="button" id="fxMode" class="switch-btn" data-value="false">Off</button>
-              </div>
-              <div class="field">
-                <label>American</label>
-                <button type="button" id="isAmerican" class="switch-btn" data-value="false">Off</button>
               </div>
               <div class="field param-full">
                 <label>MC Sampler</label>
@@ -144,7 +146,7 @@
               <div class="field"><label>Spot Shock</label><input id="batchSpotShock" type="number" value="0.02" step="0.01"></div>
             </div>
 
-            <div class="mode-params" data-modes="runBtnHedge">
+            <div class="mode-params" data-modes="runBtnStress">
               <div class="param-group-label">Hedging</div>
               <div class="field"><label title="Rebalances">Rebalances</label><input id="nReb" type="number" value="52"></div>
               <div class="field"><label title="Simulation Paths">Sim Paths</label><input id="hedgePaths" type="number" value="2000"></div>
@@ -154,7 +156,7 @@
             </div>
 
             <div class="mode-params" data-modes="runBtnStress">
-              <div class="param-group-label">Stress Library</div>
+              <div class="param-group-label">Stress / Hedging</div>
               <div class="field param-full">
                 <label>Scenario Pack</label>
                 <div id="stressPack" class="select-buttons">
@@ -178,7 +180,7 @@
               </div>
             </div>
 
-            <div class="mode-params" data-modes="runBtnIv">
+            <div class="mode-params" data-modes="runBtnPricing,runBtnIv">
               <div class="param-group-label">IV Diagnostics</div>
               <div class="field">
                 <label>Smile Points</label>
@@ -202,39 +204,11 @@
               </div>
             </div>
 
-            <div class="mode-params" data-modes="runBtnGreekSurface">
-              <div class="param-group-label">Greek Surface</div>
-              <div class="field param-full">
-                <label>Greek</label>
-                <div id="greekSelector" class="select-buttons">
-                  <button type="button" class="select-btn active" data-value="delta">Delta</button>
-                  <button type="button" class="select-btn" data-value="gamma">Gamma</button>
-                  <button type="button" class="select-btn" data-value="vega">Vega</button>
-                  <button type="button" class="select-btn" data-value="theta">Theta</button>
-                  <button type="button" class="select-btn" data-value="rho">Rho</button>
-                </div>
-              </div>
-              <div class="field">
-                <label>Spot grid pts</label>
-                <input id="greekSurfaceNSpots" type="number" value="21" min="5" max="50" step="2">
-              </div>
-              <div class="field">
-                <label>Mat grid pts</label>
-                <input id="greekSurfaceNMats" type="number" value="11" min="5" max="30" step="2">
-              </div>
-            </div>
 
-            <div class="mode-params" data-modes="runBtnCalibration">
-              <div class="param-group-label">Calibration</div>
-              <div class="field param-full">
-                <label>Model</label>
-                <div id="calibrationModel" class="select-buttons">
-                  <button type="button" class="select-btn active" data-value="bs_iv">BS Implied Vol</button>
-                  <button type="button" class="select-btn" data-value="heston">Heston</button>
-                </div>
-              </div>
+            <div class="mode-params" data-modes="runBtnPricing">
+              <div class="param-group-label">Heston Calibration</div>
               <div class="field">
-                <label>Max Iter (Heston)</label>
+                <label>Max Iter</label>
                 <input id="calibrationMaxIter" type="number" value="500" min="50" max="5000">
               </div>
             </div>
@@ -247,7 +221,7 @@
               </div>
             </div>
 
-            <div class="mode-params" data-modes="runBtnPde,runBtnBenchmark">
+            <div class="mode-params" data-modes="runBtnBenchmark">
               <div class="param-group-label">PDE</div>
               <div class="field"><label>S steps</label><input id="pdeSSteps" type="number" value="160"></div>
               <div class="field"><label>T steps</label><input id="pdeTSteps" type="number" value="160"></div>
@@ -260,14 +234,14 @@
               </div>
             </div>
 
-            <div class="mode-params" data-modes="runBtnMeasure">
+            <div class="mode-params" data-modes="runBtnBenchmark">
               <div class="param-group-label">Measure</div>
               <div class="field"><label>P/Q steps</label><input id="cmpSteps" type="number" value="400"></div>
               <div class="field"><label>P/Q paths</label><input id="cmpPaths" type="number" value="10000"></div>
               <div class="field"><label>RN n steps</label><input id="measureN" type="number" value="500"></div>
             </div>
 
-            <div class="mode-params" data-modes="runBtnConvergence,runBtnBenchmark">
+            <div class="mode-params" data-modes="runBtnBenchmark">
               <div class="param-group-label">Convergence / Benchmark</div>
               <div class="field param-full">
                 <label title="Step Ladder">step ladder</label>
@@ -293,21 +267,11 @@
             <div class="compute-mode-section">
               <div class="button-row">
                 <button id="runBtnPricing" class="mode-switch" type="button">Pricing</button>
-                <button id="runBtnScenario" class="mode-switch" type="button">Scenario</button>
-                <button id="runBtnIv" class="mode-switch" type="button">IV</button>
-                <button id="runBtnGreekSurface" class="mode-switch" type="button">Greeks</button>
-                <button id="runBtnCalibration" class="mode-switch" type="button">Calibration</button>
                 <button id="runBtnMultiLeg" class="mode-switch" type="button">Multi-Leg</button>
-                <button id="runBtnStress" class="mode-switch" type="button">Stress</button>
-                <button id="runBtnHedge" class="mode-switch" type="button">Hedging</button>
+                <button id="runBtnStress" class="mode-switch" type="button">Risk</button>
               </div>
               <div class="button-row">
-                <button id="runBtnPde" class="mode-switch" type="button">PDE</button>
-                <button id="runBtnMeasure" class="mode-switch" type="button">Measure</button>
-                <button id="runBtnConvergence" class="mode-switch" type="button">Convergence</button>
-              </div>
-              <div class="button-row">
-                <button id="runBtnBenchmark" class="mode-switch" type="button">Benchmark</button>
+                <button id="runBtnBenchmark" class="mode-switch" type="button">Numerics</button>
                 <button id="runBtnValidation" class="mode-switch" type="button">Validation Only</button>
               </div>
             </div>
@@ -381,28 +345,14 @@
           <section id="resultCardPricing" class="result-section is-hidden">
             <div class="result-section-label">Pricing<span id="diagPricing" class="diag-badge"></span></div>
             <div id="pricingOut"></div>
-            <div id="pricingBatchOut"></div>
-          </section>
-
-          <section id="resultCardScenario" class="result-section is-hidden">
-            <div class="result-section-label">Scenario Analysis<span id="diagScenario" class="diag-badge"></span></div>
-            <div id="scenarioOut"></div>
-          </section>
-
-          <section id="resultCardIv" class="result-section is-hidden">
-            <div class="result-section-label">IV Diagnostics<span id="diagIv" class="diag-badge"></span></div>
+            <div id="calibrationIvOut"></div>
+            <div id="calibrationOut"></div>
             <div id="ivOut"></div>
-          </section>
-
-          <section id="resultCardGreekSurface" class="result-section is-hidden">
-            <div class="result-section-label">Greek Surface</div>
+            <div id="pricingBatchOut"></div>
+            <div id="scenarioOut"></div>
             <div id="greekSurfaceOut"></div>
           </section>
 
-          <section id="resultCardCalibration" class="result-section is-hidden">
-            <div class="result-section-label">Calibration</div>
-            <div id="calibrationOut"></div>
-          </section>
 
           <section id="resultCardMultiLeg" class="result-section is-hidden">
             <div class="result-section-label">Multi-Leg Strategy</div>
@@ -410,34 +360,18 @@
           </section>
 
           <section id="resultCardStress" class="result-section is-hidden">
-            <div class="result-section-label">Stress Library<span id="diagStress" class="diag-badge"></span></div>
+            <div class="result-section-label">Risk<span id="diagStress" class="diag-badge"></span></div>
             <div id="stressOut"></div>
-          </section>
-
-          <section id="resultCardHedge" class="result-section is-hidden">
-            <div class="result-section-label">Hedging<span id="diagHedge" class="diag-badge"></span></div>
             <div id="hedgeOut"></div>
           </section>
 
-          <section id="resultCardPde" class="result-section is-hidden">
-            <div class="result-section-label">PDE Solver<span id="diagPde" class="diag-badge"></span></div>
+          <section id="resultCardBenchmark" class="result-section is-hidden">
+            <div class="result-section-label">Numerics<span id="diagBenchmark" class="diag-badge"></span></div>
             <div id="pdeOut"></div>
-          </section>
-
-          <section id="resultCardMeasure" class="result-section is-hidden">
-            <div class="result-section-label">Measure<span id="diagMeasure" class="diag-badge"></span></div>
+            <div id="convergenceOut"></div>
+            <div id="benchmarkOut"></div>
             <div id="measureCompareOut"></div>
             <div id="measureOut"></div>
-          </section>
-
-          <section id="resultCardConvergence" class="result-section is-hidden">
-            <div class="result-section-label">Convergence<span id="diagConvergence" class="diag-badge"></span></div>
-            <div id="convergenceOut"></div>
-          </section>
-
-          <section id="resultCardBenchmark" class="result-section is-hidden">
-            <div class="result-section-label">Benchmark<span id="diagBenchmark" class="diag-badge"></span></div>
-            <div id="benchmarkOut"></div>
           </section>
 
           <section id="resultCardValidation" class="result-section is-hidden">

@@ -28,6 +28,7 @@ import {
   renderKv,
   renderValidation,
   renderGreekSurface,
+  renderAllGreeks,
   renderMultiLeg,
   renderCalibration,
 } from "../ui/core.js";
@@ -321,11 +322,11 @@ export function basePayload() {
     vol:            Number(document.getElementById("vol").value),
     maturity:       Number(document.getElementById("maturity").value),
     n_paths:        Number(document.getElementById("nPaths").value),
-    product_type:   getSelectButtonValue("productType"),
+    option_type:    getSelectButtonValue("optionType") || "call",
+    is_american:    getSelectButtonValue("exerciseStyle") === "american",
     dividend_yield: Number(document.getElementById("dividendYield").value),
     numeraire:      getSelectButtonValue("numeraire"),
     fx_mode:        getSwitchValue("fxMode"),
-    is_american:    getSwitchValue("isAmerican"),
     mc_sampler:     getSelectButtonValue("mcSampler") || "pseudorandom",
   };
 }
@@ -435,6 +436,7 @@ export async function runPricingMain(showResultCard) {
   const isBatch = activeModeSwitch(["pricingModeSingle", "pricingModeBatch"]) === "pricingModeBatch";
   if (isBatch) {
     document.getElementById("pricingOut").innerHTML = "";
+    document.getElementById("scenarioOut").innerHTML = "";
     setRunning("pricingBatchOut", "pricing batch");
     try {
       const base = basePayload();
@@ -448,10 +450,87 @@ export async function runPricingMain(showResultCard) {
   } else {
     document.getElementById("pricingBatchOut").innerHTML = "";
     setRunning("pricingOut", "pricing");
-    try {
-      const data = await postJson("/tool/pricing/run", basePayload());
-      renderPricing("pricingOut", data);
-    } catch (err) { showError("pricingOut", err); }
+    setRunning("calibrationIvOut", "bs iv");
+    setRunning("calibrationOut", "heston");
+    setRunning("ivOut", "iv diagnostics");
+    setRunning("scenarioOut", "scenario");
+    setRunning("greekSurfaceOut", "greek surfaces");
+    const base = basePayload();
+    const greekPayload = (greek) => ({
+      strike:         base.strike,
+      rate:           base.rate,
+      vol:            base.vol,
+      dividend_yield: base.dividend_yield,
+      spot_min:       base.spot * 0.6,
+      spot_max:       base.spot * 1.4,
+      mat_min:        0.05,
+      mat_max:        Math.max(0.1, base.maturity * 2),
+      n_spots:        21,
+      n_mats:         11,
+      greek,
+    });
+    const lowerQ = Number(document.getElementById("burstLowerQ")?.value ?? 10) / 100;
+    const upperQ = Number(document.getElementById("burstUpperQ")?.value ?? 90) / 100;
+    const hestonPayload = (() => {
+      const S = base.spot, K = base.strike, r = base.rate, v = base.vol, T = base.maturity, q = base.dividend_yield;
+      const kMult = [0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15], tMult = [0.5, 1.0];
+      const strikes = [], maturities = [], synthPrices = [];
+      for (const km of kMult) for (const tm of tMult) {
+        const k = K * km, mat = T * tm;
+        strikes.push(k); maturities.push(mat);
+        const mono = Math.log(k / S) / Math.sqrt(mat);
+        const adjV = Math.max(0.05, v * (1 + 0.15 * mono * mono - 0.1 * mono));
+        const d1 = (Math.log(S / k) + (r + 0.5 * adjV * adjV) * mat) / (adjV * Math.sqrt(mat));
+        const d2 = d1 - adjV * Math.sqrt(mat);
+        const erf1 = 0.5 * (1 + Math.sign(d1) * Math.sqrt(1 - Math.exp(-d1 * d1 * 2 / Math.PI)));
+        const erf2 = 0.5 * (1 + Math.sign(d2) * Math.sqrt(1 - Math.exp(-d2 * d2 * 2 / Math.PI)));
+        synthPrices.push(Math.max(S * erf1 - k * Math.exp(-r * mat) * erf2, 0.001));
+      }
+      return { spot: S, rate: r, dividend_yield: q, market_strikes: strikes, market_maturities: maturities,
+               market_prices: synthPrices, init_v0: v*v, init_kappa: 1.5, init_theta: v*v, init_xi: 0.5,
+               init_rho: -0.7, max_iter: Number(document.getElementById("calibrationMaxIter")?.value || 500) };
+    })();
+    const [pricingR, bsIvR, hestonR, ivDiagR, scenarioR, ...greekResults] = await Promise.allSettled([
+      postJson("/tool/pricing/run", base),
+      postJson("/tool/calibration/iv", {
+        market_price:   base.spot * 0.1,
+        spot:           base.spot,
+        strike:         base.strike,
+        rate:           base.rate,
+        maturity:       base.maturity,
+        dividend_yield: base.dividend_yield,
+      }),
+      postJson("/tool/calibration/heston", hestonPayload),
+      postJson("/market/iv/diagnostics", {
+        spot:                 Number(document.getElementById("spot").value),
+        strike:               Number(document.getElementById("strike").value),
+        maturity:             Number(document.getElementById("maturity").value),
+        smile_points:         Number(document.getElementById("ivSmilePoints")?.value || 11),
+        moneyness_steps:      Number(document.getElementById("ivKSteps")?.value || 9),
+        tenor_steps:          Number(document.getElementById("ivTSteps")?.value || 7),
+        burst_lower_quantile: lowerQ,
+        burst_upper_quantile: upperQ,
+      }),
+      postJson("/tool/scenario/run", base),
+      ...["delta", "gamma", "theta", "vega", "rho"].map((g) => postJson("/tool/greek/surface", greekPayload(g))),
+    ]);
+
+    if (pricingR.status  === "fulfilled") renderPricing("pricingOut", pricingR.value);
+    else showError("pricingOut", pricingR.reason);
+
+    if (bsIvR.status     === "fulfilled") renderCalibration("calibrationIvOut", bsIvR.value, "bs_iv");
+    else document.getElementById("calibrationIvOut").innerHTML = "";
+
+    if (hestonR.status   === "fulfilled") renderCalibration("calibrationOut", hestonR.value, "heston");
+    else document.getElementById("calibrationOut").innerHTML = "";
+
+    if (ivDiagR.status   === "fulfilled") renderIv("ivOut", ivDiagR.value);
+    else document.getElementById("ivOut").innerHTML = "";
+
+    if (scenarioR.status === "fulfilled") renderScenario("scenarioOut", scenarioR.value);
+    else document.getElementById("scenarioOut").innerHTML = "";
+
+    renderAllGreeks("greekSurfaceOut", greekResults.filter(r => r.status === "fulfilled").map(r => r.value));
   }
 }
 
@@ -487,43 +566,42 @@ export async function runIv(showResultCard) {
 export async function runStress(showResultCard) {
   showResultCard("resultCardStress");
   setRunning("stressOut", "stress library");
-  try {
-    const base = basePayload();
-    const data = await postJson("/tool/stress/run", {
-      spot: base.spot,
-      strike: base.strike,
-      rate: base.rate,
-      vol: base.vol,
-      maturity: base.maturity,
-      n_paths: base.n_paths,
-      dividend_yield: base.dividend_yield,
-      n_rebalances: Number(document.getElementById("nReb").value),
-      hedge_paths: Number(document.getElementById("hedgePaths").value),
-      transaction_cost_bps: Number(document.getElementById("hedgeTcBps").value),
-      rebalance_threshold: Number(document.getElementById("hedgeThreshold").value),
-      vol_mismatch_mult: Number(document.getElementById("hedgeVolMismatchMult").value),
-      stress_pack: getSelectButtonValue("stressPack"),
-      stress_severity: getSelectButtonValue("stressSeverity"),
-      include_hedge_compare: getSwitchValue("stressIncludeHedge"),
-    });
-    renderStress("stressOut", data);
-  } catch (err) { showError("stressOut", err); }
-}
-
-export async function runHedge(showResultCard) {
-  showResultCard("resultCardHedge");
   setRunning("hedgeOut", "hedging");
-  try {
-    const data = await postJson("/tool/hedging/run", {
-      ...basePayload(),
-      n_rebalances: Number(document.getElementById("nReb").value),
-      n_paths:      Number(document.getElementById("hedgePaths").value),
-      transaction_cost_bps: Number(document.getElementById("hedgeTcBps").value),
-      rebalance_threshold: Number(document.getElementById("hedgeThreshold").value),
-      vol_mismatch_mult: Number(document.getElementById("hedgeVolMismatchMult").value),
-    });
-    renderHedging("hedgeOut", data);
-  } catch (err) { showError("hedgeOut", err); }
+  const base = basePayload();
+  const hedgeParams = {
+    n_rebalances:         Number(document.getElementById("nReb").value),
+    transaction_cost_bps: Number(document.getElementById("hedgeTcBps").value),
+    rebalance_threshold:  Number(document.getElementById("hedgeThreshold").value),
+    vol_mismatch_mult:    Number(document.getElementById("hedgeVolMismatchMult").value),
+  };
+
+  const [stressResult, hedgeResult] = await Promise.allSettled([
+    postJson("/tool/stress/run", {
+      spot:                 base.spot,
+      strike:               base.strike,
+      rate:                 base.rate,
+      vol:                  base.vol,
+      maturity:             base.maturity,
+      n_paths:              base.n_paths,
+      dividend_yield:       base.dividend_yield,
+      hedge_paths:          Number(document.getElementById("hedgePaths").value),
+      stress_pack:          getSelectButtonValue("stressPack"),
+      stress_severity:      getSelectButtonValue("stressSeverity"),
+      include_hedge_compare: getSwitchValue("stressIncludeHedge"),
+      ...hedgeParams,
+    }),
+    postJson("/tool/hedging/run", {
+      ...base,
+      n_paths: Number(document.getElementById("hedgePaths").value),
+      ...hedgeParams,
+    }),
+  ]);
+
+  if (stressResult.status === "fulfilled") renderStress("stressOut", stressResult.value);
+  else showError("stressOut", stressResult.reason);
+
+  if (hedgeResult.status === "fulfilled") renderHedging("hedgeOut", hedgeResult.value);
+  else showError("hedgeOut", hedgeResult.reason);
 }
 
 export async function runPde(showResultCard) {
@@ -628,70 +706,44 @@ export async function runGreekSurface(showResultCard) {
 
 export async function runCalibration(showResultCard) {
   showResultCard("resultCardCalibration");
-  setRunning("calibrationOut", "calibration");
+  setRunning("calibrationOut", "heston calibration");
   try {
-    const base  = basePayload();
-    const model = getSelectButtonValue("calibrationModel") || "bs_iv";
-
-    if (model === "bs_iv") {
-      // Single BS IV: back-solve from the BS price at current params
-      const bsPrice = base.spot * 0.1; // fallback; ideally use live market price
-      const data = await postJson("/tool/calibration/iv", {
-        market_price:   bsPrice > 0 ? bsPrice : base.spot * 0.05,
-        spot:           base.spot,
-        strike:         base.strike,
-        rate:           base.rate,
-        maturity:       base.maturity,
-        dividend_yield: base.dividend_yield,
-      });
-      renderCalibration("calibrationOut", data, "bs_iv");
-    } else {
-      // Heston: build a synthetic smile grid from current params for calibration demo
-      const S = base.spot, K = base.strike, r = base.rate;
-      const v = base.vol, T = base.maturity, q = base.dividend_yield;
-      const kMult  = [0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15];
-      const tMult  = [0.5, 1.0];
-      const strikes = [], maturities = [], prices = [];
-      for (const km of kMult) {
-        for (const tm of tMult) {
-          strikes.push(K * km);
-          maturities.push(T * tm);
-          // Generate "market" price = BS price + small smile adjustment
-          const moneyness = Math.log(K * km / S);
-          const skew = -0.1 * moneyness;  // mild negative skew
-          const adjVol = Math.max(0.01, v + skew);
-          // We'll just pass the base vol price as market price (identity calibration)
-          prices.push(null);  // will be filled by the engine itself
-        }
-      }
-      // For a meaningful demo: calibrate to BS prices at slightly different vols
-      const synthPrices = strikes.map((k, i) => {
-        const mono = Math.log(k / S) / Math.sqrt(maturities[i]);
+    const base = basePayload();
+    const S = base.spot, K = base.strike, r = base.rate;
+    const v = base.vol, T = base.maturity, q = base.dividend_yield;
+    const kMult = [0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15];
+    const tMult = [0.5, 1.0];
+    const strikes = [], maturities = [], synthPrices = [];
+    for (const km of kMult) {
+      for (const tm of tMult) {
+        const k = K * km, mat = T * tm;
+        strikes.push(k);
+        maturities.push(mat);
+        const mono = Math.log(k / S) / Math.sqrt(mat);
         const adjV = Math.max(0.05, v * (1 + 0.15 * mono * mono - 0.1 * mono));
-        const d1 = (Math.log(S/k) + (r + 0.5*adjV*adjV)*maturities[i]) / (adjV*Math.sqrt(maturities[i]));
-        const d2 = d1 - adjV*Math.sqrt(maturities[i]);
-        const erf1 = 0.5*(1+Math.sign(d1)*Math.sqrt(1-Math.exp(-d1*d1*2/Math.PI)));
-        const erf2 = 0.5*(1+Math.sign(d2)*Math.sqrt(1-Math.exp(-d2*d2*2/Math.PI)));
-        return Math.max(S*erf1 - k*Math.exp(-r*maturities[i])*erf2, 0.001);
-      });
-
-      const maxIter = Number(document.getElementById("calibrationMaxIter")?.value || 500);
-      const data = await postJson("/tool/calibration/heston", {
-        spot:               S,
-        rate:               r,
-        dividend_yield:     q,
-        market_strikes:     strikes,
-        market_maturities:  maturities,
-        market_prices:      synthPrices,
-        init_v0:    v * v,
-        init_kappa: 1.5,
-        init_theta: v * v,
-        init_xi:    0.5,
-        init_rho:   -0.7,
-        max_iter:   maxIter,
-      });
-      renderCalibration("calibrationOut", data, "heston");
+        const d1 = (Math.log(S / k) + (r + 0.5 * adjV * adjV) * mat) / (adjV * Math.sqrt(mat));
+        const d2 = d1 - adjV * Math.sqrt(mat);
+        const erf1 = 0.5 * (1 + Math.sign(d1) * Math.sqrt(1 - Math.exp(-d1 * d1 * 2 / Math.PI)));
+        const erf2 = 0.5 * (1 + Math.sign(d2) * Math.sqrt(1 - Math.exp(-d2 * d2 * 2 / Math.PI)));
+        synthPrices.push(Math.max(S * erf1 - k * Math.exp(-r * mat) * erf2, 0.001));
+      }
     }
+    const maxIter = Number(document.getElementById("calibrationMaxIter")?.value || 500);
+    const data = await postJson("/tool/calibration/heston", {
+      spot:              S,
+      rate:              r,
+      dividend_yield:    q,
+      market_strikes:    strikes,
+      market_maturities: maturities,
+      market_prices:     synthPrices,
+      init_v0:    v * v,
+      init_kappa: 1.5,
+      init_theta: v * v,
+      init_xi:    0.5,
+      init_rho:   -0.7,
+      max_iter:   maxIter,
+    });
+    renderCalibration("calibrationOut", data, "heston");
   } catch (err) { showError("calibrationOut", err); }
 }
 
@@ -721,17 +773,72 @@ export async function runMultiLeg(showResultCard) {
 
 export async function runBenchmark(showResultCard) {
   showResultCard("resultCardBenchmark");
+  setRunning("pdeOut", "pde solver");
+  setRunning("convergenceOut", "convergence");
   setRunning("benchmarkOut", "benchmark");
-  try {
-    const data = await postJson("/tool/benchmark/run", {
-      pricing:            basePayload(),
-      pde_method:         getSelectButtonValue("pdeMethod"),
-      pde_s_steps:        Number(document.getElementById("pdeSSteps").value),
-      pde_t_steps:        Number(document.getElementById("pdeTSteps").value),
+  setRunning("measureCompareOut", "measure");
+  document.getElementById("measureOut").innerHTML = "";
+  const base = basePayload();
+  const ladder = document.getElementById("convSteps").value
+    .split(",")
+    .map((x) => Number(x.trim()))
+    .filter((x) => Number.isFinite(x) && x > 1);
+  const pdeMethod = getSelectButtonValue("pdeMethod");
+  const pdeSSteps = Number(document.getElementById("pdeSSteps").value);
+  const pdeTSteps = Number(document.getElementById("pdeTSteps").value);
+  const mu        = Number(document.getElementById("mu").value);
+  const r         = Number(document.getElementById("rate").value);
+  const sigma     = Number(document.getElementById("vol").value);
+  const t         = Number(document.getElementById("maturity").value);
+
+  const [pdeResult, convResult, benchResult, measureResult] = await Promise.allSettled([
+    postJson("/tool/pde/run", {
+      spot:           base.spot,
+      strike:         base.strike,
+      rate:           r,
+      vol:            sigma,
+      maturity:       t,
+      dividend_yield: base.dividend_yield,
+      s_steps:        pdeSSteps,
+      t_steps:        pdeTSteps,
+      method:         pdeMethod,
+      option_type:    "call",
+    }),
+    postJson("/tool/convergence/run", {
+      spot:           base.spot,
+      strike:         base.strike,
+      rate:           r,
+      vol:            sigma,
+      maturity:       t,
+      dividend_yield: base.dividend_yield,
+      step_ladder:    ladder.length ? ladder : [10, 20, 40, 80, 120, 200, 320, 500],
+    }),
+    postJson("/tool/benchmark/run", {
+      pricing:            base,
+      pde_method:         pdeMethod,
+      pde_s_steps:        pdeSSteps,
+      pde_t_steps:        pdeTSteps,
       benchmark_baseline: getSelectButtonValue("benchmarkBase"),
-    });
-    renderBenchmark("benchmarkOut", data);
-  } catch (err) { showError("benchmarkOut", err); }
+    }),
+    postJson("/tool/measure/compare", {
+      mu, r, sigma, t,
+      n_steps: Number(document.getElementById("cmpSteps").value),
+      n_paths: Number(document.getElementById("cmpPaths").value),
+      x0: 1.0,
+    }),
+  ]);
+
+  if (pdeResult.status     === "fulfilled") renderPde("pdeOut", pdeResult.value);
+  else showError("pdeOut", pdeResult.reason);
+
+  if (convResult.status    === "fulfilled") renderConvergence("convergenceOut", convResult.value);
+  else showError("convergenceOut", convResult.reason);
+
+  if (benchResult.status   === "fulfilled") renderBenchmark("benchmarkOut", benchResult.value);
+  else showError("benchmarkOut", benchResult.reason);
+
+  if (measureResult.status === "fulfilled") renderMeasureCompare("measureCompareOut", measureResult.value);
+  else showError("measureCompareOut", measureResult.reason);
 }
 
 /* ─── Stress pack dynamic loader ─────────────────────────────────────────── */

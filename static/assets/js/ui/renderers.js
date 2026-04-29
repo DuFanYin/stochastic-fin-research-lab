@@ -9,6 +9,11 @@ import {
   tableHtml,
   metricsRow,
 } from "./core.js";
+
+function pass(text) { return `<span class="text-success">${text}</span>`; }
+function fail(text) { return `<span class="text-danger">${text}</span>`; }
+function warn(text) { return `<span class="text-warning">${text}</span>`; }
+function badge(cls, text) { return `<span class="signal-badge signal-badge--${cls}">${text}</span>`; }
 import {
   sparkline,
   groupedBarChart,
@@ -22,6 +27,9 @@ import {
   pnlHistogramCanvas,
   thresholdCompareChart,
   efficiencyFrontierChart,
+  horizontalBarChart,
+  residualBarChart,
+  rankingBarChart,
 } from "./charts.js";
 
 export function renderPricing(elId, data) {
@@ -33,13 +41,18 @@ export function renderPricing(elId, data) {
 
   const ciLow  = s.mc_ci_low  != null ? fmt(s.mc_ci_low)  : "-";
   const ciHigh = s.mc_ci_high != null ? fmt(s.mc_ci_high) : "-";
+  const spreadOk = s.method_spread != null && Math.abs(Number(s.method_spread)) < 0.01;
+  const spreadFmt = s.method_spread != null ? (spreadOk ? pass(fmt(s.method_spread)) : warn(fmt(s.method_spread))) : "-";
+  const relSpreadFmt = s.relative_spread != null
+    ? (Math.abs(Number(s.relative_spread)) < 0.005 ? pass(fmt(s.relative_spread)) : warn(fmt(s.relative_spread)))
+    : "-";
 
   setHtml(elId, resultWrap(`
     ${metricsRow([
       ["Black-Scholes Price", s.bs],
       ["Monte Carlo Price", s.mc],
       ["Binomial Price", s.binomial],
-      ["Method Spread", s.method_spread],
+      ["Method Spread", spreadFmt],
     ])}
     ${metricsRow([
       ["MC Std Error", s.mc_std_err],
@@ -51,9 +64,9 @@ export function renderPricing(elId, data) {
       ["Delta (BS)", g.delta_bs],
       ["Gamma (BS)", g.gamma_bs],
       ["Theta (BS)", g.theta_bs],
-      ["Vega (BS)", g.vega_bs],
-      ["Rho (BS)", g.rho_bs],
-      ["Relative Spread", s.relative_spread],
+      ["Vega (BS)",  g.vega_bs],
+      ["Rho (BS)",   g.rho_bs],
+      ["Relative Spread", relSpreadFmt],
     ])}
     ${s.american != null ? metricsRow([["American Price (Binomial Tree)", s.american]]) : ""}
   `));
@@ -68,7 +81,6 @@ export function renderScenario(elId, data) {
     ${sectionLabel("Scenario Black-Scholes Prices")}
     <div class="sparkline-wrap">${tornadoChart(tornadoPoints)}</div>
     <div class="chart-caption">Tornado sensitivity chart: left negative impact, right positive impact (vs base).</div>
-    ${tableHtml(rows, ["rank", "scenario", "base_price", "bs_price", "vs_base_diff", "abs_vs_base_diff", "vs_base_pct", "vs_base_bps"])}
   `));
 }
 
@@ -150,20 +162,25 @@ export function renderStress(elId, data) {
   const css = data.result_details?.cross_scenario_summary || null;
   setDiagBadge("diagStress", data.diagnostics);
 
+  const worstShiftFmt = s.worst_mc_shift != null ? fail(fmt(s.worst_mc_shift)) : "-";
+  const robustFmt = css?.robustness_score != null
+    ? (Number(css.robustness_score) >= 0.7 ? pass(fmt(css.robustness_score))
+     : Number(css.robustness_score) >= 0.4 ? warn(fmt(css.robustness_score))
+     : fail(fmt(css.robustness_score)))
+    : null;
+
   const crossSection = css ? `
     ${sectionLabel("Cross-Scenario Robustness")}
     ${metricsRow([
-      ["Robustness Score", css.robustness_score],
+      ["Robustness Score", robustFmt ?? css.robustness_score],
       ["Key Driver", css.key_driver],
       ["Key Driver Contribution", css.key_driver_contribution_pct != null ? css.key_driver_contribution_pct + "%" : "-"],
       ["Worst Scenario", css.worst_scenario],
-      ["Worst P&L Impact", css.worst_pnl_impact],
-      ["Scenarios Breaching 5% Threshold", css.scenarios_breaching_threshold],
+      ["Worst P&L Impact", css.worst_pnl_impact != null ? fail(fmt(css.worst_pnl_impact)) : "-"],
+      ["Scenarios Breaching 5% Threshold", css.scenarios_breaching_threshold > 0 ? warn(css.scenarios_breaching_threshold) : pass(css.scenarios_breaching_threshold ?? 0)],
       ["Hedge Resilience Mean ES95", css.hedge_resilience_mean],
-      ["Hedge Resilience Worst ES95", css.hedge_resilience_worst],
+      ["Hedge Resilience Worst ES95", css.hedge_resilience_worst != null ? fail(fmt(css.hedge_resilience_worst)) : "-"],
     ])}
-    ${sectionLabel("Scenario Ranking by Severity")}
-    ${tableHtml(css.scenario_ranking || [], ["rank", "name", "pnl_impact", "severity_score"])}
   ` : "";
 
   setHtml(elId, resultWrap(`
@@ -173,33 +190,17 @@ export function renderStress(elId, data) {
       ["Scenario Count", s.scenario_count],
       ["Base MC", s.base_mc],
       ["Worst Scenario", s.worst_scenario],
-      ["Worst MC Shift", s.worst_mc_shift],
+      ["Worst MC Shift", worstShiftFmt],
     ])}
     ${crossSection}
     ${sectionLabel("Stress Severity Tornado")}
     <div class="sparkline-wrap">${tornadoChart(tornadoPoints)}</div>
     ${sectionLabel("Scenario Ranking")}
-    ${tableHtml(ranking, ["scenario", "severity_score", "mc_shift_vs_base"])}
+    <div class="sparkline-wrap">${rankingBarChart(ranking, "scenario", "severity_score")}</div>
     ${sectionLabel("Portfolio Correlation Ranking")}
-    ${tableHtml(corrRanking, ["scenario", "portfolio_correlation_score", "mc_shift_vs_base"])}
+    <div class="sparkline-wrap">${rankingBarChart(corrRanking, "scenario", "portfolio_correlation_score")}</div>
     ${sectionLabel("Hedge Resilience Ranking")}
-    ${tableHtml(hedgeResilience, ["scenario", "hedge_normalized_std", "hedge_best_strategy"])}
-    ${sectionLabel("Scenario Details")}
-    ${tableHtml(rows.map((r) => ({
-      Scenario: r.scenario,
-      Description: r.description,
-      Spot: r.spot,
-      Vol: r.vol,
-      Rate: r.rate,
-      "MC Shift vs Base": r.mc_shift_vs_base,
-      "BS Shift vs Base": r.bs_shift_vs_base,
-      "Binomial Shift vs Base": r.binomial_shift_vs_base,
-      "Portfolio Correlation Score": r.portfolio_correlation_score,
-      "Hedge Norm Std": r.hedge?.normalized_std,
-      "Hedge ES95": r.hedge?.es95,
-      "Best Hedge Strategy": r.hedge?.best_strategy,
-      "Attribution (spot/vol/rate)": `${fmt(r.attribution?.spot_component)} / ${fmt(r.attribution?.vol_component)} / ${fmt(r.attribution?.rate_component)}`,
-    })), ["Scenario", "Description", "Spot", "Vol", "Rate", "MC Shift vs Base", "BS Shift vs Base", "Binomial Shift vs Base", "Portfolio Correlation Score", "Hedge Norm Std", "Hedge ES95", "Best Hedge Strategy", "Attribution (spot/vol/rate)"])}
+    <div class="sparkline-wrap">${rankingBarChart(hedgeResilience, "scenario", "hedge_normalized_std")}</div>
   `));
 }
 
@@ -217,6 +218,7 @@ export function renderPricingBatch(elId, data) {
   }));
   setDiagBadge("diagPricing", data.diagnostics);
 
+  const spreadPoints = rows.map((r, i) => ({ x: i, y: Number.isFinite(Number(r.spread)) ? Number(r.spread) : 0 }));
   setHtml(elId, resultWrap(`
     ${metricsRow([
       ["Jobs", s.job_count],
@@ -232,19 +234,8 @@ export function renderPricingBatch(elId, data) {
     ])}
     ${sectionLabel("Method Summary")}
     ${tableHtml(methodSummary, ["Method", "Avg", "Min", "Max", "Std Dev", "Avg Err vs BS"])}
-    ${sectionLabel("Per-Job Results")}
-    ${tableHtml(rows.map((r) => ({
-      "#": r["#"],
-      "Spot": r.spot,
-      "Strike": r.strike,
-      "Vol": r.vol,
-      "Black-Scholes": r.bs,
-      "Monte Carlo": r.mc,
-      "Binomial": r.binomial,
-      "MC − BS": r["mc-bs"],
-      "Bin − BS": r["bin-bs"],
-      "Spread": r.spread,
-    })), ["#", "Spot", "Strike", "Vol", "Black-Scholes", "Monte Carlo", "Binomial", "MC − BS", "Bin − BS", "Spread"])}
+    ${sectionLabel("Spread by Job")}
+    <div class="sparkline-wrap">${lineChart(spreadPoints)}</div>
   `));
 }
 
@@ -362,7 +353,7 @@ export function renderMeasureCompare(elId, data) {
       ["Path Dispersion Δ", s.path_dispersion_gap],
     ])}
     ${sectionLabel("Distribution Comparison: Physical Measure vs Risk-Neutral Measure")}
-    ${tableHtml(distributionRows, ["measure", "mean", "variance", "q05", "q50", "q95"])}
+    <div class="sparkline-wrap">${groupedBarChart(distributionRows, ["mean", "variance", "q05", "q50", "q95"])}</div>
     ${previewP.length && previewQ.length ? `
       ${sectionLabel("P/Q Dual-Path Comparison")}
       <div class="sparkline-wrap">${dualLineChart(previewP, previewQ)}</div>
@@ -387,7 +378,7 @@ export function renderPde(elId, data) {
       ["Total Grid Points", s.grid_points],
       ["S/T Aspect Ratio", s.s_t_aspect_ratio],
       ["Grid Density per Maturity", s.grid_density_per_maturity],
-      ["Price vs Black-Scholes Gap", s.price_vs_bs_gap],
+      ["Price vs Black-Scholes Gap", s.price_vs_bs_gap != null ? (Math.abs(Number(s.price_vs_bs_gap)) < 0.001 ? pass(fmt(s.price_vs_bs_gap)) : warn(fmt(s.price_vs_bs_gap))) : "-"],
     ])}
   `));
 }
@@ -401,26 +392,19 @@ export function renderConvergence(elId, data) {
   setHtml(elId, resultWrap(`
     ${metricsRow([
       ["Black-Scholes Reference Price", s.bs_ref],
-      ["Min Absolute Error", s.best_abs_error],
-      ["Max Absolute Error", s.worst_abs_error],
+      ["Min Absolute Error", s.best_abs_error != null ? pass(fmt(s.best_abs_error)) : "-"],
+      ["Max Absolute Error", s.worst_abs_error != null ? fail(fmt(s.worst_abs_error)) : "-"],
       ["Ladder Size", s.ladder_size],
       ["Best Steps", s.best_steps],
       ["Last Error", s.last_error],
-      ["Improvement Ratio", s.improvement_ratio],
+      ["Improvement Ratio", s.improvement_ratio != null ? (Number(s.improvement_ratio) > 2 ? pass(fmt(s.improvement_ratio)) : warn(fmt(s.improvement_ratio))) : "-"],
       ["Log Slope", s.log_slope],
       ["First to Best Improvement", s.first_to_best_improvement],
       ["Last Two Improvement Ratio", s.last_two_improvement_ratio],
-      ["Monotonicity Breaks", s.monotonicity_break_count],
+      ["Monotonicity Breaks", s.monotonicity_break_count > 0 ? warn(s.monotonicity_break_count) : pass(s.monotonicity_break_count ?? 0)],
     ])}
-    ${sectionLabel("Convergence Table")}
+    ${sectionLabel("Convergence")}
     <div class="sparkline-wrap">${lineChart(curvePoints)}</div>
-    ${tableHtml(rows.map((r) => ({
-      "Steps": r.steps,
-      "Binomial Price": r.binomial,
-      "Absolute Error": r.abs_error,
-      "Relative Error": r.rel_error,
-      "Error Ratio vs Prev": r.error_ratio_vs_prev,
-    })), ["Steps", "Binomial Price", "Absolute Error", "Relative Error", "Error Ratio vs Prev"])}
   `));
 }
 
@@ -434,23 +418,11 @@ export function renderBenchmark(elId, data) {
     ${metricsRow([
       ["Baseline Method", s.baseline_method],
       ["Baseline Price", s.baseline_price],
-      ["Winner Method", s.winner_method],
-      ["Winner Relative Error", s.winner_rel_error],
+      ["Winner Method", s.winner_method ? pass(s.winner_method) : "-"],
+      ["Winner Relative Error", s.winner_rel_error != null ? (Number(s.winner_rel_error) < 0.001 ? pass(fmt(s.winner_rel_error)) : warn(fmt(s.winner_rel_error))) : "-"],
     ])}
     ${sectionLabel("Method Comparison")}
     <div class="sparkline-wrap">${groupedBarChart(chartRows, ["price", "runtime_ms", "accuracy_abs_error"])}</div>
-    ${tableHtml(rows.map((r) => ({
-      "Method": r.method,
-      "Price": r.price,
-      "Runtime (ms)": r.runtime_ms,
-      "Abs Error": r.accuracy_abs_error,
-      "Rel Error": r.accuracy_rel_error,
-      "Runtime Rank": r.runtime_rank,
-      "Accuracy Rank": r.accuracy_rank,
-      "Efficiency": r.efficiency,
-      "Efficiency Rank": r.efficiency_rank,
-      "Stability": r.stability,
-    })), ["Method", "Price", "Runtime (ms)", "Abs Error", "Rel Error", "Runtime Rank", "Accuracy Rank", "Efficiency", "Efficiency Rank", "Stability"])}
   `));
 }
 
@@ -460,11 +432,21 @@ export function renderValidation(elId, rows, summary = null) {
   const thresholdRows = summary?.threshold_rows || data;
   setDiagBadge("diagValidation", summary);
 
+  const gate = summary?.gate_decision;
+  const gateFmt = gate === "pass" ? pass(gate) : gate === "fail" ? fail(gate) : gate;
+  const failedFmt = summary?.checks_failed > 0 ? fail(summary.checks_failed) : pass(summary?.checks_failed ?? 0);
+
+  const coloredRows = data.map((r) => ({
+    ...r,
+    status: r.status === "pass" ? pass("pass") : r.status === "fail" ? fail("fail") : r.status,
+    excess: r.excess != null && Number(r.excess) > 0 ? fail(fmt(r.excess)) : fmt(r.excess ?? 0),
+  }));
+
   setHtml(elId, resultWrap(`
     ${summary ? metricsRow([
       ["Total Checks", summary.checks_total],
-      ["Failed", summary.checks_failed],
-      ["Gate Decision", summary.gate_decision],
+      ["Failed", failedFmt],
+      ["Gate Decision", gateFmt],
       ["Fail Rate", summary.fail_rate],
       ["Failed (Stats)", failByCap.stats ?? 0],
       ["Failed (Itô)", failByCap.ito ?? 0],
@@ -474,7 +456,7 @@ export function renderValidation(elId, rows, summary = null) {
     ]) : ""}
     ${sectionLabel("Validation Metrics vs Thresholds")}
     <div class="sparkline-wrap">${thresholdCompareChart(thresholdRows)}</div>
-    ${tableHtml(data, ["capability", "metric", "value", "threshold", "excess", "status", "interpretation", "action"])}
+    ${tableHtml(coloredRows, ["capability", "metric", "value", "threshold", "excess", "status", "interpretation", "action"])}
   `));
 }
 
@@ -501,16 +483,16 @@ export function renderCalibration(elId, data, model) {
       ["ρ (correlation)",fmt(s.rho)],
     ];
     const quality = s.fit_quality || "unknown";
-    const badge = quality === "good" ? "✓ Good fit"
-                : quality === "fair" ? "~ Fair fit" : "✗ Poor fit";
+    const fitBadge = quality === "good" ? badge("pass", "✓ Good fit")
+                   : quality === "fair" ? badge("warning", "~ Fair fit")
+                   : badge("fail", "✗ Poor fit");
     const residuals = rd.residuals || [];
     const modelPrices = rd.model_prices || [];
     setHtml(elId, resultWrap(`
       ${sectionLabel("Heston Calibration")}
-      <div class="diag-line">${badge} — RMSE: ${fmt(s.rmse)}, Max err: ${fmt(s.max_abs_error)}, Iters: ${s.iterations}</div>
+      <div class="diag-line">${fitBadge} — RMSE: ${fmt(s.rmse)}, Max err: ${fmt(s.max_abs_error)}, Iters: ${s.iterations}</div>
       ${metricsRow(params)}
-      ${modelPrices.length ? `<table class="data-table"><thead><tr><th>#</th><th>Model</th><th>Residual</th></tr></thead>
-        <tbody>${modelPrices.map((p,i) => `<tr><td>${i+1}</td><td>${fmt(p)}</td><td>${fmt(residuals[i]??0)}</td></tr>`).join("")}</tbody></table>` : ""}
+      ${modelPrices.length ? `<div class="sparkline-wrap">${residualBarChart(modelPrices, residuals)}</div>` : ""}
     `));
   } else {
     // BS Implied Vol
@@ -572,8 +554,8 @@ export function renderGreekSurface(elId, data) {
     spots:      rd.spots      || [],
     maturities: rd.maturities || [],
     grid:       rd.grid       || [],
-    grid_min:   s.grid_min  ?? 0,
-    grid_max:   s.grid_max  ?? 1,
+    grid_min:   s.grid_min  != null ? s.grid_min : 0,
+    grid_max:   s.grid_max  != null ? s.grid_max : 1,
   };
   setHtml(elId, resultWrap(`
     ${sectionLabel(surfaceData.greek.charAt(0).toUpperCase() + surfaceData.greek.slice(1) + " Surface")}
@@ -585,5 +567,31 @@ export function renderGreekSurface(elId, data) {
     ])}
     <div class="chart-wrap">${greekSurfaceHeatmap(surfaceData)}</div>
   `));
+}
+
+export function renderAllGreeks(elId, greekDataArray) {
+  if (!greekDataArray || !greekDataArray.length) {
+    document.getElementById(elId).innerHTML = "";
+    return;
+  }
+  const sections = greekDataArray.map((data) => {
+    if (!data) return "";
+    const s  = data.result_summary || {};
+    const rd = data.result_details  || {};
+    const name = (s.greek || "").charAt(0).toUpperCase() + (s.greek || "").slice(1);
+    const surfaceData = {
+      greek:      s.greek      || "delta",
+      spots:      rd.spots      || [],
+      maturities: rd.maturities || [],
+      grid:       rd.grid       || [],
+      grid_min:   s.grid_min != null ? s.grid_min : 0,
+      grid_max:   s.grid_max != null ? s.grid_max : 1,
+    };
+    return `
+      ${sectionLabel(name + " Surface")}
+      <div class="chart-wrap">${greekSurfaceHeatmap(surfaceData)}</div>
+    `;
+  }).join("");
+  document.getElementById(elId).innerHTML = resultWrap(sections);
 }
 
