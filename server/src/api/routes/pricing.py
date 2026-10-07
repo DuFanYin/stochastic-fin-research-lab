@@ -13,9 +13,10 @@ from src.schemas.request_models import (
     StressLibraryRequest,
 )
 from src.services.engine_client import (
-    pde_price,
+    pde_solve,
     pricing_bundle,
     run_convergence_steps,
+    run_engine_task,
 )
 from src.services.analytics import (
     convergence_summary,
@@ -30,10 +31,18 @@ router = APIRouter(tags=["pricing"])
 def _run_convergence(req: ConvergenceRequest) -> dict:
     rows = run_convergence_steps(
         req.spot, req.strike, req.rate, req.vol,
-        req.maturity, req.dividend_yield, req.step_ladder,
+        req.maturity, req.dividend_yield, req.step_ladder, req.option_type,
     )
     bs_ref = rows[0]["bs_ref"] if rows else 0.0
     summary, details = convergence_summary(rows, bs_ref)
+    # Same diagnostics for the trinomial lattice, on its own error column.
+    tri_rows = [{**r, "abs_error": r["trinomial_abs_error"]} for r in rows]
+    tri_summary, tri_details = convergence_summary(tri_rows, bs_ref)
+    summary["option_type"] = req.option_type
+    summary["trinomial"] = {k: tri_summary[k] for k in (
+        "best_abs_error", "worst_abs_error", "best_steps", "last_error",
+        "improvement_ratio", "log_slope", "monotonicity_break_count")}
+    details["trinomial_curve_points"] = tri_details["curve_points"]
     return {"summary": summary, "details": details}
 
 
@@ -43,22 +52,24 @@ def _run_benchmark(req: BenchmarkRequest) -> dict:
 
     t0     = perf_counter()
     bundle = pricing_bundle(p.spot, p.strike, p.rate, p.vol,
-                            p.maturity, p.n_paths, steps, p.dividend_yield)
+                            p.maturity, p.n_paths, steps, p.dividend_yield, p.option_type)
     mc_ms  = (perf_counter() - t0) * 1000.0
 
     t1        = perf_counter()
-    pde_price_ = pde_price(p.spot, p.strike, p.rate, p.vol, p.maturity,
-                            p.dividend_yield, req.pde_s_steps, req.pde_t_steps,
-                            req.pde_method)
+    method    = req.pde_method if req.pde_method in {"crank_nicolson", "implicit", "explicit"} else "crank_nicolson"
+    pde       = pde_solve(p.spot, p.strike, p.rate, p.vol, p.maturity, p.dividend_yield,
+                          req.pde_s_steps, req.pde_t_steps, method, p.option_type)
     pde_ms    = (perf_counter() - t1) * 1000.0
 
+    # MC, BS, binomial and trinomial come from one engine call; MC dominates its runtime.
     rows = [
-        {"method": "mc",       "price": bundle["mc"],       "runtime_ms": mc_ms},
-        {"method": "bs",       "price": bundle["bs"],        "runtime_ms": 0.0},
-        {"method": "binomial", "price": bundle["binomial"],  "runtime_ms": 0.0},
-        {"method": "pde",      "price": pde_price_,          "runtime_ms": pde_ms},
+        {"method": "mc",        "price": bundle["mc"],        "runtime_ms": mc_ms},
+        {"method": "bs",        "price": bundle["bs"],        "runtime_ms": 0.0},
+        {"method": "binomial",  "price": bundle["binomial"],  "runtime_ms": 0.0},
+        {"method": "trinomial", "price": bundle["trinomial"], "runtime_ms": 0.0},
+        {"method": "pde",       "price": pde.get("price", 0.0), "runtime_ms": pde_ms},
     ]
-    baseline_name = req.benchmark_baseline if req.benchmark_baseline in {"pde","bs","mc","binomial"} else "pde"
+    baseline_name = req.benchmark_baseline if req.benchmark_baseline in {"pde","bs","mc","binomial","trinomial"} else "pde"
     baseline = next((r["price"] for r in rows if r["method"] == baseline_name), rows[0]["price"])
     for r in rows:
         ae = abs(r["price"] - baseline)
@@ -156,32 +167,48 @@ def tool_stress(req: StressLibraryRequest) -> dict:
 
 @router.post("/tool/pde/run")
 def tool_pde(req: PdeRequest) -> dict:
-    method = req.method.lower() if req.method.lower() in {"implicit", "crank_nicolson"} else "crank_nicolson"
-    t0     = perf_counter()
-    price  = pde_price(req.spot, req.strike, req.rate, req.vol, req.maturity,
-                       req.dividend_yield, int(req.s_steps), int(req.t_steps), method)
-    bs_ref = pricing_bundle(
-        req.spot, req.strike, req.rate, req.vol,
-        req.maturity, 8000, max(10, int(req.maturity * 250)), req.dividend_yield
-    )["bs"]
+    t0 = perf_counter()
+    try:
+        pde = pde_solve(req.spot, req.strike, req.rate, req.vol, req.maturity, req.dividend_yield,
+                        int(req.s_steps), int(req.t_steps), req.method, req.option_type, req.is_american)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Reference: Black-Scholes for European; a 1000-step binomial tree for American.
+    ref = run_engine_task("pricing", {
+        "spot": req.spot, "strike": req.strike, "rate": req.rate, "vol": req.vol,
+        "maturity": req.maturity, "dividend_yield": req.dividend_yield, "n_paths": 100,
+        "n_steps": 1000, "option_type": req.option_type, "is_american": req.is_american, "lsm_paths": 1000,
+    }).get("result_summary", {})
+    ref_name  = "binomial_american" if req.is_american else "bs"
+    ref_price = (ref.get("american_methods") or {}).get("binomial") if req.is_american else ref.get("bs")
     ms = (perf_counter() - t0) * 1000.0
-    s_t_aspect_ratio = req.s_steps / max(req.t_steps, 1)
-    grid_density_per_maturity = (req.s_steps * req.t_steps) / max(req.maturity, 1e-12)
-    grid_points = req.s_steps * req.t_steps
+    price = pde.get("price", 0.0)
+    t_used = pde.get("t_steps_used", req.t_steps)
+    grid_points = req.s_steps * t_used
+    notes = ["pde_cpp"]
+    if pde.get("stability_refined"):
+        notes.append(f"explicit scheme refined to {t_used} time steps for stability")
     return _record(
         tool_name="pde",
         input_params=req.model_dump(),
         result_summary={
             "price": price,
-            "method": method,
+            "method": req.method,
+            "option_type": req.option_type,
+            "is_american": req.is_american,
             "s_steps": req.s_steps,
             "t_steps": req.t_steps,
+            "t_steps_used": t_used,
+            "stability_refined": pde.get("stability_refined", False),
+            "psor_iterations": pde.get("psor_iterations", 0),
             "grid_points": grid_points,
-            "s_t_aspect_ratio": s_t_aspect_ratio,
-            "grid_density_per_maturity": grid_density_per_maturity,
-            "price_vs_bs_gap": price - bs_ref,
+            "s_t_aspect_ratio": req.s_steps / max(t_used, 1),
+            "grid_density_per_maturity": grid_points / max(req.maturity, 1e-12),
+            "reference_method": ref_name,
+            "reference_price": ref_price,
+            "price_vs_bs_gap": (price - ref_price) if ref_price is not None else None,
         },
-        diagnostics=_diag(ms, ["pde_cpp"]),
+        diagnostics=_diag(ms, notes),
     )
 
 

@@ -33,6 +33,21 @@ import {
   payoffChart,
 } from "./charts.js";
 
+function americanTable(a) {
+  const ref = Number(a.binomial);
+  const rows = [
+    ["Binomial (CRR)", a.binomial, ""],
+    ["Trinomial (Boyle)", a.trinomial, ""],
+    ["PDE Crank-Nicolson + PSOR", a.pde_psor, `${a.pde_psor_iterations ?? "-"} PSOR sweeps`],
+    ["Longstaff-Schwartz MC", a.lsm, `± ${fmt(1.96 * Number(a.lsm_std_err))} (95%), ${a.lsm_paths ?? "-"} paths`],
+  ].map(([name, v, note]) => `<tr><td>${name}</td><td>${fmt(v)}</td>
+      <td>${Number.isFinite(ref) && ref ? fmt((Number(v) - ref) / ref) : "-"}</td><td>${note}</td></tr>`).join("");
+  return `${sectionLabel("American Exercise")}
+    ${metricsRow([["Early Exercise Premium (binomial)", a.early_exercise_premium]])}
+    <table class="dense-table"><thead><tr><th>Method</th><th>Price</th><th>Rel. vs Binomial</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
 export function renderPricing(elId, data) {
   if (!data) return setHtml(elId, statusError("No response"));
   const s = data.result_summary || {};
@@ -50,9 +65,11 @@ export function renderPricing(elId, data) {
 
   setHtml(elId, resultWrap(`
     ${metricsRow([
+      ["Option", (s.option_type || "call").toUpperCase()],
       ["Black-Scholes Price", s.bs],
       ["Monte Carlo Price", s.mc],
       ["Binomial Price", s.binomial],
+      ["Trinomial Price", s.trinomial],
       ["Method Spread", spreadFmt],
     ])}
     ${metricsRow([
@@ -60,6 +77,7 @@ export function renderPricing(elId, data) {
       ["MC 95% CI", `[${ciLow}, ${ciHigh}]`],
       ["MC − BS", e.mc_minus_bs],
       ["Binomial − BS", e.binomial_minus_bs],
+      ["Trinomial − BS", s.trinomial_minus_bs],
     ])}
     ${metricsRow([
       ["Delta (BS)", g.delta_bs],
@@ -69,7 +87,7 @@ export function renderPricing(elId, data) {
       ["Rho (BS)",   g.rho_bs],
       ["Relative Spread", relSpreadFmt],
     ])}
-    ${s.american != null ? metricsRow([["American Price (Binomial Tree)", s.american]]) : ""}
+    ${s.american_methods ? americanTable(s.american_methods) : (s.american != null ? metricsRow([["American Price (Binomial Tree)", s.american]]) : "")}
   `));
 }
 
@@ -374,12 +392,15 @@ export function renderPde(elId, data) {
     ${metricsRow([
       ["PDE Price", s.price],
       ["Method", s.method],
+      ["Contract", `${s.is_american ? "American" : "European"} ${s.option_type || "call"}`],
       ["Space Grid (S)", s.s_steps],
-      ["Time Grid (T)", s.t_steps],
+      ["Time Grid (T)", s.stability_refined ? warn(`${s.t_steps} → ${s.t_steps_used} (stability)`) : s.t_steps],
+      ["PSOR Sweeps", s.is_american && s.method !== "explicit" ? s.psor_iterations : "-"],
+      ["Reference", s.reference_method ? `${s.reference_method} ${fmt(s.reference_price)}` : "-"],
       ["Total Grid Points", s.grid_points],
       ["S/T Aspect Ratio", s.s_t_aspect_ratio],
       ["Grid Density per Maturity", s.grid_density_per_maturity],
-      ["Price vs Black-Scholes Gap", s.price_vs_bs_gap != null ? (Math.abs(Number(s.price_vs_bs_gap)) < 0.001 ? pass(fmt(s.price_vs_bs_gap)) : warn(fmt(s.price_vs_bs_gap))) : "-"],
+      ["Price vs Reference Gap", s.price_vs_bs_gap != null ? (Math.abs(Number(s.price_vs_bs_gap)) < 0.001 ? pass(fmt(s.price_vs_bs_gap)) : warn(fmt(s.price_vs_bs_gap))) : "-"],
     ])}
   `));
 }
@@ -389,6 +410,7 @@ export function renderConvergence(elId, data) {
   const s = data.result_summary || {};
   const rows = data.result_details?.rows || [];
   const curvePoints = data.result_details?.curve_points || [];
+  const triPoints = data.result_details?.trinomial_curve_points || [];
   setDiagBadge("diagConvergence", data.diagnostics);
   setHtml(elId, resultWrap(`
     ${metricsRow([
@@ -404,8 +426,19 @@ export function renderConvergence(elId, data) {
       ["Last Two Improvement Ratio", s.last_two_improvement_ratio],
       ["Monotonicity Breaks", s.monotonicity_break_count > 0 ? warn(s.monotonicity_break_count) : pass(s.monotonicity_break_count ?? 0)],
     ])}
-    ${sectionLabel("Convergence")}
-    <div class="sparkline-wrap">${lineChart(curvePoints)}</div>
+    ${s.trinomial ? `${sectionLabel("Trinomial Lattice")}
+    ${metricsRow([
+      ["Min Absolute Error", s.trinomial.best_abs_error],
+      ["Last Error", s.trinomial.last_error],
+      ["Log Slope", s.trinomial.log_slope],
+      ["Monotonicity Breaks", s.trinomial.monotonicity_break_count],
+    ])}` : ""}
+    ${sectionLabel("Convergence — |price − BS| vs steps")}
+    <div class="sparkline-wrap">${triPoints.length
+      ? dualLineChart(curvePoints.map((p) => p.y), triPoints.map((p) => p.y))
+      : lineChart(curvePoints)}</div>
+    ${triPoints.length ? `<div class="chart-legend"><span class="swatch" style="background:#d6d6d6"></span>Binomial
+      <span class="swatch" style="background:#7f7f7f"></span>Trinomial</div>` : ""}
   `));
 }
 

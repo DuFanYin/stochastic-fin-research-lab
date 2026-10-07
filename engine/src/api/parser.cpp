@@ -127,7 +127,9 @@ PricingParams parse_pricing_params(const json& j) {
         jv<int>(j, "n_paths", 10000), jv<int>(j, "n_steps", 0), jv<bool>(j, "is_american", false),
         jv<bool>(j, "fx_mode", false), jv<std::string>(j, "product_type", "european_call"),
         jv<std::string>(j, "numeraire", "money_market"),
-        jv<std::string>(j, "mc_sampler", "pseudorandom")
+        jv<std::string>(j, "mc_sampler", "pseudorandom"),
+        jv<std::string>(j, "option_type", ""),
+        jv<int>(j, "lsm_paths", 0), jv<int>(j, "lsm_steps", 50)
     };
 }
 
@@ -163,7 +165,8 @@ ValidationParams parse_validation_params(const json& j) {
         jv<bool>(j, "compute_block_on_validation", false), jv<double>(j, "stats_theta", 1.0), jv<int>(j, "stats_n", 10000),
         jv<double>(j, "ito_theta", 0.7), jv<double>(j, "ito_t", 1.0), jv<int>(j, "ito_n", 2000),
         jv<std::string>(j, "ito_function_type", "exp_martingale"), jv<int>(j, "sim_steps", 100),
-        jv<int>(j, "n_rebalances", 52), jv<int>(j, "hedge_paths", 500)
+        jv<int>(j, "n_rebalances", 52), jv<int>(j, "hedge_paths", 500),
+        jv<bool>(j, "pick_lattice", false)
     };
 }
 
@@ -205,7 +208,8 @@ PdeParams parse_pde_params(const json& j) {
     return PdeParams{
         jv<double>(j, "spot", 0.0), jv<double>(j, "strike", 0.0), jv<double>(j, "rate", 0.0),
         jv<double>(j, "vol", 0.0), jv<double>(j, "maturity", 1.0), jv<double>(j, "dividend_yield", 0.0),
-        jv<int>(j, "s_steps", 100), jv<int>(j, "t_steps", 100), jv<std::string>(j, "method", "crank_nicolson")
+        jv<int>(j, "s_steps", 100), jv<int>(j, "t_steps", 100), jv<std::string>(j, "method", "crank_nicolson"),
+        jv<std::string>(j, "option_type", "call"), jv<bool>(j, "is_american", false)
     };
 }
 
@@ -218,6 +222,15 @@ std::string ser_pricing(const std::string& tid, const PricingResult& r, double m
         {"mc_ci_low",  r.mc - kZ95 * r.mc_std_err},
         {"mc_ci_high", r.mc + kZ95 * r.mc_std_err},
         {"american",   r.has_american ? json(r.american) : json(nullptr)},
+        {"option_type", r.is_call ? "call" : "put"},
+        {"trinomial",  r.trinomial},
+        {"trinomial_minus_bs", r.trinomial - r.bs},
+        {"american_methods", r.has_american ? json{
+            {"binomial", r.american_binomial}, {"trinomial", r.american_trinomial},
+            {"pde_psor", r.american_pde}, {"pde_psor_iterations", r.american_pde_psor_iterations},
+            {"lsm", r.american_lsm}, {"lsm_std_err", r.american_lsm_stderr}, {"lsm_paths", r.american_lsm_paths},
+            {"early_exercise_premium", r.american_binomial - r.binomial},
+        } : json(nullptr)},
         {"method_spread", r.spread}, {"relative_spread", r.rel_spread},
         {"pricing_stability", r.stability}, {"numeraire", r.numeraire},
         {"greeks", {{"delta_bs", r.delta_bs}, {"gamma_bs", r.gamma_bs},
@@ -485,7 +498,10 @@ std::string run_pde_json(const std::string& src, double t0_ms) {
     const auto r = run_pde(parse_pde_params(ctx->body));
     json jj = base_envelope(ctx->trace_id);
     jj["result_summary"] = {{"price",r.price},{"method",r.method},
-                              {"s_steps",r.s_steps},{"t_steps",r.t_steps}};
+                              {"s_steps",r.s_steps},{"t_steps",r.t_steps},
+                              {"t_steps_used",r.t_steps_used},{"stability_refined",r.refined},
+                              {"psor_iterations",r.psor_iterations},
+                              {"option_type",r.option_type},{"is_american",r.is_american}};
     jj["diagnostics"] = diag_block(elapsed_ms(t0_ms), "pde");
     return jj.dump();
 }

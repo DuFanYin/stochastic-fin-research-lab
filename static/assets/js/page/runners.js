@@ -212,6 +212,9 @@ export async function fetchLiveData() {
   // Shared mutable state assembled across concurrent callbacks
   const snap = { rate_curve: {}, rate_curve_pct: {}, iv_surface: [] };
   _lastSnap = snap;
+  // Responses can arrive after the user switched to Sim (or a newer fetch
+  // started); they must not overwrite the inputs then.
+  const current = () => getDataMode() === "live" && _lastSnap === snap;
 
   let spotResolved = null;
   let volPct = null, ratePct = null, muPct = null;
@@ -233,9 +236,11 @@ export async function fetchLiveData() {
   const spotPromise = getJson("/market/spot").then((d) => {
     snap.spot = d.spot;
     spotResolved = d.spot;
-    setLiveField("spot", d.spot);
-    if (strikeEl && !strikeEl.dataset.userEdited) strikeEl.value = d.spot;
-    refreshBanner();
+    if (current()) {
+      setLiveField("spot", d.spot);
+      if (strikeEl && !strikeEl.dataset.userEdited) strikeEl.value = d.spot;
+      refreshBanner();
+    }
     return d.spot;
   });
 
@@ -244,6 +249,7 @@ export async function fetchLiveData() {
     snap.vol = d.vol;
     snap.vol_pct = d.vol_pct;
     volPct = d.vol_pct;
+    if (!current()) return;
     setLiveField("vol", d.vol);
     refreshBanner();
   }).catch(() => {});
@@ -254,6 +260,7 @@ export async function fetchLiveData() {
     snap.mu_pct = d.mu_pct;
     snap.funding_8h_pct = d.funding_8h_pct;
     muPct = d.mu_pct;
+    if (!current()) return;
     setLiveField("mu", d.mu);
     setInfoLine("fundingLine1", `8h rate  ${d.funding_8h_pct}%  →  ${d.mu_pct}% ann`);
     setInfoLine("fundingLine2", `source   Binance perpetual funding`);
@@ -267,7 +274,7 @@ export async function fetchLiveData() {
     snap.rate_curve = d.rate_curve;
     snap.rate_curve_pct = d.rate_curve_pct;
     ratePct = d.rate_pct;
-    refreshBanner();
+    if (current()) refreshBanner();
     return d;
   }).catch(() => null);
 
@@ -287,6 +294,7 @@ export async function fetchLiveData() {
     const maturity     = Number(document.getElementById("maturity")?.value) || 0.25;
     const targetStrike = Number(strikeEl?.value) || snap.spot;
     const resolved     = await callResolve(snap, targetStrike, maturity);
+    if (!current()) return;
     applyResolve(resolved, snap);
     // Update banner rate slot once resolved; keep iv slot as DVOL (already shown)
     if (resolved) ratePct = resolved.rate_pct;
@@ -312,6 +320,7 @@ export async function resolveFromSnapshot() {
   const strikeEl     = document.getElementById("strike");
   const targetStrike = Number(strikeEl?.value) || snap.spot;
   const resolved     = await callResolve(snap, targetStrike, maturity);
+  if (getDataMode() !== "live" || _lastSnap !== snap) return;
   applyResolve(resolved, snap);
 }
 
@@ -343,7 +352,7 @@ function activeModeSwitch(ids) {
 
 export async function runValidationForCompute(isPicked, showOnly) {
   const hasAnyPick =
-    isPicked("pickStats") || isPicked("pickIto") || isPicked("pickSimulation");
+    isPicked("pickStats") || isPicked("pickIto") || isPicked("pickSimulation") || isPicked("pickLattice");
   if (!hasAnyPick) {
     return { passed: true, rows: [] };
   }
@@ -356,6 +365,7 @@ export async function runValidationForCompute(isPicked, showOnly) {
     pick_stats: isPicked("pickStats"),
     pick_ito: isPicked("pickIto"),
     pick_simulation: isPicked("pickSimulation"),
+    pick_lattice: isPicked("pickLattice"),
     compute_block_on_validation: isPicked("computeBlockOnValidation"),
     spot: base.spot,
     strike: base.strike,
@@ -414,10 +424,10 @@ export async function runValidationForCompute(isPicked, showOnly) {
 
 export async function runValidationOnly(showOnly, isPicked) {
   const hasAny =
-    isPicked("pickStats") || isPicked("pickIto") || isPicked("pickSimulation");
+    isPicked("pickStats") || isPicked("pickIto") || isPicked("pickSimulation") || isPicked("pickLattice");
   if (!hasAny) {
     showOnly("resultCardValidation");
-    renderKv("validationSummaryOut", { hint: "Select at least one validation capability (Stats / Ito / Simulation)." }, "Hint");
+    renderKv("validationSummaryOut", { hint: "Select at least one validation capability (Stats / Ito / Simulation / Lattice)." }, "Hint");
     renderKv("validationOut", { detail: "No validation checks available to run." }, "");
     return;
   }
@@ -652,7 +662,8 @@ export async function runPde(showResultCard) {
       s_steps:        Number(document.getElementById("pdeSSteps").value),
       t_steps:        Number(document.getElementById("pdeTSteps").value),
       method:         getSelectButtonValue("pdeMethod"),
-      option_type:    "call",
+      option_type:    base.option_type,
+      is_american:    base.is_american,
     });
     renderPde("pdeOut", data);
   } catch (err) { showError("pdeOut", err); }
@@ -832,7 +843,8 @@ export async function runBenchmark(showResultCard) {
       s_steps:        pdeSSteps,
       t_steps:        pdeTSteps,
       method:         pdeMethod,
-      option_type:    "call",
+      option_type:    base.option_type,
+      is_american:    base.is_american,
     }),
     postJson("/tool/convergence/run", {
       spot:           base.spot,
@@ -841,6 +853,7 @@ export async function runBenchmark(showResultCard) {
       vol:            sigma,
       maturity:       t,
       dividend_yield: base.dividend_yield,
+      option_type:    base.option_type,
       step_ladder:    ladder.length ? ladder : [10, 20, 40, 80, 120, 200, 320, 500],
     }),
     postJson("/tool/benchmark/run", {

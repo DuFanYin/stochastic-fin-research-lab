@@ -23,6 +23,9 @@ struct PricingParams {
     std::string product_type = "european_call";
     std::string numeraire    = "money_market";
     std::string mc_sampler   = "pseudorandom";  // "pseudorandom" | "antithetic" | "sobol"
+    std::string option_type  = "";   // "call" | "put"; "" -> derived from product_type
+    int    lsm_paths     = 0;        // 0 = min(max(n_paths, 1000), 200000)
+    int    lsm_steps     = 50;
 };
 
 struct BatchGridParams {
@@ -124,6 +127,7 @@ struct ValidationParams {
     int    sim_steps       = 100;
     int    n_rebalances    = 52;
     int    hedge_paths     = 500;
+    bool   pick_lattice    = false;   // trinomial vs BS, LSM / PDE vs binomial American
 };
 
 ValidationResult run_validation(const ValidationParams& p);
@@ -182,7 +186,9 @@ struct PdeParams {
     double dividend_yield = 0.0;
     int    s_steps        = 100;
     int    t_steps        = 100;
-    std::string method    = "crank_nicolson";
+    std::string method    = "crank_nicolson";   // crank_nicolson | implicit | explicit
+    std::string option_type = "call";
+    bool   is_american    = false;
 };
 
 struct SimulationResult {
@@ -219,6 +225,11 @@ struct PdeResult {
     std::string method;
     int         s_steps = 0;
     int         t_steps = 0;
+    int         t_steps_used = 0;     // > t_steps when the explicit scheme was refined for stability
+    bool        refined = false;
+    long long   psor_iterations = 0;
+    std::string option_type;
+    bool        is_american = false;
 };
 
 struct VolSurfaceParams {

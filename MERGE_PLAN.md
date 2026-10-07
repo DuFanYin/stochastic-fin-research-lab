@@ -38,20 +38,20 @@ Deribit 公开 BTC / ETH 期权链（lab 现有数据源，无需 token）
 | option-screener/main.py + inspect.html | Chain Inspector | Workbench "Chain" 视图 | 重写为前端模式，不保留独立页面 |
 | option-screener/python/ | Python 版 screener | — | **丢弃**（只保留 C++） |
 | Option-Pricing/trees/trinomialTree.cpp | 三叉树（滚动存储） | `kernel/pricing/trinomial_lattice.cpp` | 只取滚动存储写法；概率参数有误，以 QF-205 为准 |
-| QF-205/methods/trinomial.py | Boyle 三叉树（欧式 / 美式，参数正确） | `kernel/pricing/trinomial_lattice.cpp` | **主要来源**，移植为 C++ |
-| QF-205/methods/fd.py | 显式 / 隐式 / CN，美式用 PSOR | `kernel/pricing/pde.cpp` | 显式差分与**美式 PSOR** 以它为准（lab 的 PDE 目前没有美式） |
+| QF-205/methods/trinomial.py | Boyle 三叉树（欧式 / 美式，参数正确） | `kernel/pricing/trinomial_lattice.cpp` | ✅ 已移植 |
+| QF-205/methods/fd.py | 显式 / 隐式 / CN，美式用 PSOR | `kernel/pricing/pde.cpp` | ✅ 已移植（含 3 处修正） |
 | QF-205/methods/{binomial,monte_carlo}.py | CRR 二叉树、欧式 MC | — | lab 已有，只用作对拍基准 |
-| QF-205 整个 Python 包 | 全部定价方法 | `tests/reference/`（作为外部依赖调用，不复制源码） | **数值基准**：Phase 4 的 C++ 结果与它逐项对拍 |
+| QF-205 整个 Python 包 | 全部定价方法 | `tests/reference/`（作为外部依赖调用，不复制源码） | ✅ 对拍测试 `tests/reference/` |
 | QF-205/main.py、cli.py、report.md | Tkinter GUI、CLI、课程报告 | — | **丢弃** |
-| Option-Pricing/monteCarlo/monteCarlo*.cpp | Longstaff-Schwartz 美式 MC | `kernel/pricing/lsm_american.cpp` | 移植，并行改 OpenMP |
+| Option-Pricing/monteCarlo/monteCarlo*.cpp | Longstaff-Schwartz 美式 MC | `kernel/pricing/lsm_american.cpp` | ✅ 已移植（`lsm_american.cpp`） |
 | Option-Pricing/explicitFDM.cpp | 显式差分 | — | 被 QF-205 的实现取代（后者支持 put / 美式 / 更合理的网格） |
 | Option-Pricing/implicitFDM.cpp | 隐式差分 | — | 已被 pde.cpp θ=1.0 覆盖，不移植 |
 | Option-Pricing/trees/binomialTree.cpp | 二叉树 | — | 已有 `binomial_lattice.cpp`，只取剪枝思路做对比 |
-| Option-Pricing/Queue/、线程池版 MC | 无锁队列、RingBuffer、线程池 | `bench/concurrency/` | 独立 bench，不进主流程 |
+| Option-Pricing/Queue/、线程池版 MC | 无锁队列、RingBuffer、线程池 | `bench/concurrency/` | ✅ 已迁入（修正 SPSC / ring buffer 的用法） |
 
 ---
 
-## 已完成（Phase 0–3）
+## 已完成（Phase 0–5）
 
 ### Phase 0 — 仓库准备
 README 改为相对路径与 `./run.sh build`；UPGRADE.md 的 "glob" 描述改正（CMake 是显式列表）。源码按模块移植，文件头注明来源 commit。
@@ -83,50 +83,31 @@ README 改为相对路径与 `./run.sh build`；UPGRADE.md 的 "glob" 描述改�
 - 测试：`tests/test_screener_api.py`（10 项）。已用 Playwright + 系统 Chrome 在真实页面中走通全部流程，无 JS 报错。
 - 已知问题：`market_data` 的模块级 httpx 客户端绑定在单个事件循环上，uvicorn 下没有问题；测试中需要 `with TestClient(...)`。
 
----
+### Phase 4 — 补全定价方法（QF-205 + Option-Pricing）
+- Kernel：`trinomial_lattice.cpp`（Boyle 三叉树 + 通用 CRR 二叉树，均支持股息率和美式）、`lsm_american.cpp`（Longstaff-Schwartz，基函数 {1, S/K, (S/K)²}，固定种子、按固定大小的路径块生成随机数和部分和，结果与线程数无关）、`pde.cpp` 重写为 `pde_solve`（call / put，CN / 隐式 / 显式，美式用 PSOR；显式格式违反稳定条件时自动加密时间步并报告）。
+- Pricing：新增 `trinomial`；`is_american` 时输出 `american_methods`（二叉树 / 三叉树 / CN+PSOR / LSM±stderr、提前行权溢价），`american` 字段保持为二叉树结果。PDE 路由支持 put / 美式 / explicit，参照价按情况取 BS 或 1000 步二叉树美式。Convergence 同时给出三叉树的误差曲线和收敛阶；Benchmark 增加 trinomial 一行。Validation 新增 `lattice` 能力（前端 Lattice 开关，默认关闭）。
+- 修掉的原有问题：前端选 Put 时 `option_type` 被 pydantic 丢弃，引擎一直按 call 定价；美式二叉树只支持 call；PDE 只支持 call；q≠0 时欧式价格多了 e^{qT} 倍，greeks 把 q 扣了两次，put 的 greeks 用的是 call 的公式；`pricing_bundle` 忽略 `steps` 参数；切到 Sim 后，仍在进行中的 Live 请求返回时会覆盖用户输入。
+- 与 QF-205 对拍（`tests/reference/test_qf205_reference.py`，用 QF-205 自己的 venv 运行）：二叉树、三叉树差 2e-13；有限差分修正 QF-205 的边界剩余期限后差 1e-14；美式 PSOR 差 ≤ 6e-4，来自 QF-205 的 PSOR 在边界节点把边界项算了两遍。证据：无股息美式 call 应等于欧式 call，C++ 差 3.5e-10，QF-205 差 2.9e-4。
+- 测试：`tests/test_pricing_methods.py`（11 项）。验收数据：三叉树收敛阶 −1.00；LSM（10 万路径）与 2000 步二叉树差 < 1%；美式 PDE 与二叉树差 < 0.5%；显式与 CN 差 5e−4。
 
-## Phase 4 — 补全定价方法（来自 QF-205 与 Option-Pricing）
-
-| 方法 | kernel 接口 | 接入点 |
-|---|---|---|
-| 三叉树 | `double trinomial_price(S,K,r,vol,T,steps,bool is_call,bool american,double q)` | `PricingResult` 新增 `trinomial`；Convergence 增加 trinomial 阶梯；Benchmark 增加一列 |
-| LSM 美式 MC | `double lsm_american_price(S,K,r,vol,T,n_paths,n_steps,bool is_call,double q,uint64_t seed,double* out_stderr)` | `is_american=true` 时与 `binomial_american` 并列输出，并给出两者差 |
-| 显式 FDM | `pde_price(..., method=2)` | `PdeParams.method` 增加 `"explicit"`；违反稳定条件 `dt ≤ 1/(σ²M² + r)` 时自动加密时间步并在 diagnostics 中提示 |
-| 美式 PDE（PSOR） | `pde_price(..., bool american, double omega)` | `PdeParams.is_american`；隐式与 CN 每个时间步用 PSOR 处理提前行权约束；Pricing 的美式结果新增一列 PDE |
-
-移植注意：
-
-- 三叉树以 QF-205 的 Boyle 实现为准（`dx = σ√(3dt)`，`p_m = 2/3`，`p_u / p_d` 按矩匹配，概率为负时报错）。Option-Pricing 的版本直接套了二叉树公式、`m = 1`，中间概率可能为负，只借用它的滚动存储写法。
-- 显式与美式 FDM 以 QF-205 为准：网格 `Smax = 4·max(K, S0)`，Thomas 三对角求解，美式用 PSOR（ω = 1.2，容差 1e−8）。移植后检查 PSOR 迭代次数，必要时改为对 CN 更快的 Brennan–Schwartz 直接法。
-- **对拍**：`tests/reference/` 以可选依赖方式调用 QF-205（`pip install -e ../QF-205`，未安装时跳过），在同一组参数网格上比较 C++ 与 Python 的三叉树、显式 / 隐式 / CN、美式 PSOR 结果，要求相对误差 < 1e−6（同一算法、同一网格，应只有浮点差异）。
-- 原 LSM 用 `std::random_device` 种子、二维 `vector<vector>` 存全部路径、正规方程 + 3×3 高斯消元。移植为：固定 seed（可复现）、单块连续内存（`n_paths × (n_steps+1)`）、路径生成 OpenMP 并行（每线程独立 `mt19937_64`）、可选 antithetic（复用现有 `SamplerType`）；基函数默认 `{1, S, S²}`，预留 Laguerre。
-- Validation Gate 新增两条检查：`trinomial_vs_bs`（欧式时误差阈值）与 `lsm_vs_binomial_american`（美式时差异阈值）。
-
----
-
-## Phase 5 — 并发 bench（可选）
-
-`bench/concurrency/` 独立 CMake target，不链接进 `sf_engine_c`：
-
-- `LockFreeQueue`、`RingBuffer` 及其测试原样迁入（去掉 `lf` / `rb` 二进制和 `raw/` 重复版本）。
-- 同一个 LSM 任务分别用 **OpenMP / 自写线程池 / 单线程** 跑，输出耗时、峰值 RSS（沿用原 `getrusage` 写法），作为"为什么主引擎选 OpenMP"的依据，写进 README。
+### Phase 5 — 并发 bench
+- `bench/concurrency/`：独立 CMake 工程，不链接进 `sf_engine_c`，`run.sh` 一键构建并输出表格，结果和结论见其 README。
+- LSM 核心抽成与执行器无关的 `engine/src/kernel/pricing/lsm_impl.h`：引擎用 OpenMP 执行器实例化，bench 用单线程和线程池执行器实例化，测的是同一份代码；所有执行器、所有线程数下价格逐位相同。
+- 迁入并修正：SPSC 无锁队列（原版的 MPMC 用法有竞争，测试只数条数）、加锁 ring buffer（原版无同步却跨线程使用）、线程池（加 `parallel_for`）。`LockFreeQueue.hpp`（`volatile` 而非原子变量）、编译产物和 `raw/` 副本不迁入。
+- 结论（M1 Pro）：OpenMP 与线程池在大规模下持平，小规模下 OpenMP 快约 15%；8 线程时加速比约 4.4 倍，受能效核和内存带宽限制；峰值内存只取决于路径矩阵的大小。SPSC 吞吐约为加锁队列的 1.4 倍。
 
 ---
 
 ## 契约版本
 
-- `contract_version` → `"v1.3"`：screener、per-leg vol / maturity / forward（已完成）；trinomial、LSM、explicit / 美式 PDE（Phase 4）。
+- `contract_version` → `"v1.3"`：screener、per-leg vol / maturity / forward、trinomial、LSM、explicit / 美式 PDE（均已完成）。
 - 全部为新增字段 / 新增路由；`PricingResult` 新字段带默认值，旧前端不受影响。
 
 ## 验收标准
 
 - ✅ Phase 1–3 的各项（移植回归、delta 对比、2 个请求、IV 曲面字段不变、IC 性能、断网回退、screener 路由与前端）均已通过，见上文。
-- 三叉树欧式价与 BS 误差随步数收敛，Convergence 的 log-slope ≈ −1。
-- LSM 美式 put 与 binomial 美式（2000 步）差 < 1%（10 万路径）。
-- 显式 FDM 在稳定条件内与 CN 结果差 < 1e−3。
-- C++ 三叉树、显式 / 隐式 / CN、美式 PSOR 与 QF-205 对拍，相对误差 < 1e−6。
-- 美式 PDE 与 binomial 美式（2000 步）差 < 0.5%。
+- ✅ Phase 4 各项（三叉树收敛阶、LSM / PDE 对二叉树美式、显式对 CN、QF-205 对拍）均已通过，见上文；美式 PSOR 与 QF-205 的差异由 QF-205 自身 bug 造成，已单独测试说明。
 
 ## 建议顺序
 
-4 → 5。
+全部完成。

@@ -126,15 +126,16 @@ def run_engine_task(task_type: str, payload: dict) -> dict:
 
 def pricing_bundle(
     spot: float, strike: float, rate: float, vol: float, maturity: float,
-    n_paths: int, steps: int, dividend_yield: float,
+    n_paths: int, steps: int, dividend_yield: float, option_type: str = "call",
 ) -> dict:
     r = run_engine_task("pricing", {
         "spot": spot, "strike": strike, "rate": rate, "vol": vol,
         "maturity": maturity, "n_paths": n_paths, "dividend_yield": dividend_yield,
+        "n_steps": int(steps), "option_type": option_type,
     })
     if r.get("status") == "error":
-        intrinsic = max(spot - strike, 0.0)
-        return {"mc": intrinsic, "bs": intrinsic, "binomial": intrinsic,
+        intrinsic = max(spot - strike, 0.0) if option_type != "put" else max(strike - spot, 0.0)
+        return {"mc": intrinsic, "bs": intrinsic, "binomial": intrinsic, "trinomial": intrinsic,
                 "mc_std_err": 0.0, "delta_bs": 0.5, "vega_bs": 0.0,
                 "mc_minus_bs": 0.0, "binomial_minus_bs": 0.0}
     s = r.get("result_summary", {})
@@ -144,6 +145,7 @@ def pricing_bundle(
         "mc":       s.get("mc",       0.0),
         "bs":       s.get("bs",       0.0),
         "binomial": s.get("binomial", 0.0),
+        "trinomial": s.get("trinomial", 0.0),
         "mc_std_err":         s.get("mc_std_err",      0.0),
         "delta_bs":           greeks.get("delta_bs",   0.5),
         "gamma_bs":           greeks.get("gamma_bs",   0.0),
@@ -239,6 +241,23 @@ def measure_density_path(mu: float, r: float, sigma: float, t: float, n_steps: i
     if result.get("status") == "error":
         return [1.0] * (max(int(n_steps), 20) + 1)
     return result.get("result_details", {}).get("density", [1.0])
+
+
+def pde_solve(
+    spot: float, strike: float, rate: float, vol: float, maturity: float,
+    dividend_yield: float, s_steps: int, t_steps: int, method: str,
+    option_type: str = "call", is_american: bool = False,
+) -> dict:
+    """Finite-difference price plus grid diagnostics (t_steps_used, psor_iterations, ...)."""
+    r = run_engine_task("pde", {
+        "spot": spot, "strike": strike, "rate": rate, "vol": vol,
+        "maturity": maturity, "dividend_yield": dividend_yield,
+        "s_steps": int(s_steps), "t_steps": int(t_steps), "method": method,
+        "option_type": option_type, "is_american": is_american,
+    })
+    if r.get("status") == "error":
+        raise ValueError(f"pde failed: {r.get('error', {}).get('message', 'unknown')}")
+    return r.get("result_summary", {})
 
 
 def pde_price(
@@ -542,24 +561,27 @@ def run_convergence_steps(
     spot: float, strike: float, rate: float, vol: float,
     maturity: float, dividend_yield: float,
     step_ladder: list[int],
+    option_type: str = "call",
 ) -> list[dict]:
-    bs_ref = pricing_bundle(spot, strike, rate, vol, maturity, 5000, 200, dividend_yield)["bs"]
+    """Binomial and trinomial lattice prices on a step ladder against the BS reference."""
     rows = []
-    prev_err = None
+    prev_err = prev_tri = None
     for steps in step_ladder:
         st = max(2, int(steps))
-        r = run_engine_task("pricing", {
+        s = run_engine_task("pricing", {
             "spot": spot, "strike": strike, "rate": rate, "vol": vol,
             "maturity": maturity, "dividend_yield": dividend_yield,
-            "n_paths": 2000, "n_steps": st,
-        })
-        binomial = r.get("result_summary", {}).get("binomial", 0.0)
-        abs_err = abs(binomial - bs_ref)
-        rel_err = abs_err / max(abs(bs_ref), 1e-10)
+            "n_paths": 100, "n_steps": st, "option_type": option_type,
+        }).get("result_summary", {})
+        bs_ref = s.get("bs", 0.0)
+        binomial, trinomial = s.get("binomial", 0.0), s.get("trinomial", 0.0)
+        abs_err, tri_err = abs(binomial - bs_ref), abs(trinomial - bs_ref)
         rows.append({
             "steps": st, "bs_ref": bs_ref, "binomial": binomial,
-            "abs_error": abs_err, "rel_error": rel_err,
+            "abs_error": abs_err, "rel_error": abs_err / max(abs(bs_ref), 1e-10),
             "error_ratio_vs_prev": (abs_err / prev_err) if prev_err else None,
+            "trinomial": trinomial, "trinomial_abs_error": tri_err,
+            "trinomial_error_ratio_vs_prev": (tri_err / prev_tri) if prev_tri else None,
         })
-        prev_err = abs_err
+        prev_err, prev_tri = abs_err, tri_err
     return rows

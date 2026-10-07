@@ -17,6 +17,9 @@ constexpr double T_DENS_CV           = 2.0;
 constexpr double T_DENS_TAIL         = 100.0;
 constexpr double T_ITO_ERR_SCALE     = 0.15;
 constexpr double T_NORM_STD          = 0.25;
+constexpr double T_TRI_VS_BS         = 1e-3;
+constexpr double T_LSM_VS_BIN        = 0.02;
+constexpr double T_PDE_VS_BIN        = 5e-3;
 
 ValidationRow make_row(
     const std::string& cap, const std::string& metric,
@@ -92,6 +95,31 @@ ValidationResult run_validation(const ValidationParams& p) {
         const double norm_std = hstats[1] / std::max(p.spot, 1e-12);
         rows.push_back(make_row("hedging", "normalized_std", norm_std, T_NORM_STD, norm_std <= T_NORM_STD,
             "hedging distribution spread", "increase rebalances or reduce vol/maturity"));
+    }
+
+    if (p.pick_lattice) {
+        // European: Boyle trinomial (400 steps) against Black-Scholes, call.
+        const double bs  = bs_closed_form_price(p.spot, p.strike, p.rate, p.vol, p.maturity, true);
+        const double tri = trinomial_price(p.spot, p.strike, p.rate, 0.0, p.vol, p.maturity, 400, true, false);
+        const double tri_rel = std::abs(tri - bs) / std::max(std::abs(bs), 1e-12);
+        rows.push_back(make_row("lattice", "trinomial_vs_bs_rel", tri_rel, T_TRI_VS_BS, tri_rel <= T_TRI_VS_BS,
+            "trinomial lattice vs closed form", "increase lattice steps or check vol / maturity inputs"));
+
+        // American put: LSM and CN-PSOR against a 1000-step binomial tree.
+        const double bin = binomial_crr_price(p.spot, p.strike, p.rate, 0.0, p.vol, p.maturity, 1000, false, true);
+        const LsmResult lsm = lsm_american_price(p.spot, p.strike, p.rate, 0.0, p.vol, p.maturity, 50000, 50, false);
+        const double lsm_rel = std::abs(lsm.price - bin) / std::max(std::abs(bin), 1e-12);
+        rows.push_back(make_row("lattice", "lsm_vs_binomial_american_rel", lsm_rel, T_LSM_VS_BIN, lsm_rel <= T_LSM_VS_BIN,
+            "Longstaff-Schwartz vs binomial American put", "increase LSM paths / exercise dates"));
+
+        PdeSpec spec;
+        spec.spot = p.spot; spec.strike = p.strike; spec.rate = p.rate; spec.vol = p.vol;
+        spec.maturity = p.maturity; spec.s_steps = 300; spec.t_steps = 300;
+        spec.is_call = false; spec.american = true;
+        const double pde = pde_solve(spec).price;
+        const double pde_rel = std::abs(pde - bin) / std::max(std::abs(bin), 1e-12);
+        rows.push_back(make_row("lattice", "pde_vs_binomial_american_rel", pde_rel, T_PDE_VS_BIN, pde_rel <= T_PDE_VS_BIN,
+            "PSOR finite difference vs binomial American put", "increase PDE grid or check boundary setup"));
     }
 
     // Summarize

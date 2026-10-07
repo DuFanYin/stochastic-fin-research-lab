@@ -57,11 +57,24 @@ MeasureCompareResult run_measure_compare(const MeasureCompareParams& p) {
 }
 
 PdeResult run_pde(const PdeParams& p) {
-    const int method_code = (p.method == "implicit") ? 1 : 0;
-    const double price = pde_price(
-        p.spot, p.strike, p.rate, p.vol, p.maturity, p.dividend_yield,
-        p.s_steps, p.t_steps, method_code);
-    return PdeResult{price, p.method, p.s_steps, p.t_steps};
+    PdeSpec spec;
+    spec.spot = p.spot; spec.strike = p.strike; spec.rate = p.rate; spec.dividend_yield = p.dividend_yield;
+    spec.vol = p.vol; spec.maturity = p.maturity; spec.s_steps = p.s_steps; spec.t_steps = p.t_steps;
+    spec.method   = p.method == "implicit" ? 1 : (p.method == "explicit" ? 2 : 0);
+    spec.is_call  = p.option_type != "put";
+    spec.american = p.is_american;
+    const PdeOutcome o = pde_solve(spec);
+    PdeResult r;
+    r.price = o.price;
+    r.method = spec.method == 1 ? "implicit" : (spec.method == 2 ? "explicit" : "crank_nicolson");
+    r.s_steps = p.s_steps;
+    r.t_steps = p.t_steps;
+    r.t_steps_used = o.t_steps_used;
+    r.refined = o.refined;
+    r.psor_iterations = o.psor_iterations;
+    r.option_type = spec.is_call ? "call" : "put";
+    r.is_american = p.is_american;
+    return r;
 }
 
 VolSurfaceResult run_vol_surface(const VolSurfaceParams& p) {

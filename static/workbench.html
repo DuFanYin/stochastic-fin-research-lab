@@ -340,6 +340,7 @@
                 <div id="pdeMethod" class="select-buttons">
                   <button type="button" class="select-btn active" data-value="crank_nicolson">CN</button>
                   <button type="button" class="select-btn" data-value="implicit">Implicit</button>
+                  <button type="button" class="select-btn" data-value="explicit" title="Time grid is refined automatically if the stability limit is violated">Explicit</button>
                 </div>
               </div>
             </div>
@@ -392,6 +393,7 @@
                 <button id="pickStats" class="mode-switch active" data-label="Stats">Stats</button>
                 <button id="pickIto" class="mode-switch active" data-label="Ito">Ito</button>
                 <button id="pickSimulation" class="mode-switch active" data-label="Simulation">Simulation</button>
+                <button id="pickLattice" class="mode-switch" data-label="Lattice" title="Trinomial vs BS; LSM and PSOR finite differences vs binomial American put">Lattice</button>
               </div>
             </div>
             <div class="compute-mode-section">

@@ -191,6 +191,46 @@ void   heston_price_batch(double spot, double rate,
 double pde_price        (double spot, double strike, double rate, double vol,
                          double maturity, double dividend_yield,
                          int s_steps, int t_steps, int method);
+
+constexpr int kPdeMaxExplicitSteps = 2'000'000;
+
+struct PdeSpec {
+    double spot = 0.0, strike = 0.0, rate = 0.0, dividend_yield = 0.0, vol = 0.0, maturity = 0.0;
+    int    s_steps = 200, t_steps = 200;
+    int    method  = 0;           // 0 Crank-Nicolson, 1 implicit, 2 explicit
+    bool   is_call = true;
+    bool   american = false;      // implicit / CN: PSOR; explicit: max with intrinsic
+    double s_max_mult = 4.0;      // S grid upper bound = s_max_mult * max(K, S0)
+    double psor_omega = 1.2;
+    double psor_tol   = 1e-8;
+    int    psor_max_iter = 20'000;
+};
+
+struct PdeOutcome {
+    double    price = 0.0;
+    int       t_steps_used = 0;   // explicit scheme refines the time grid to stay stable
+    bool      refined = false;
+    long long psor_iterations = 0;
+};
+
+PdeOutcome pde_solve(const PdeSpec& spec);
+
+// Lattices with dividend yield; American = early exercise at every node.
+double trinomial_price   (double spot, double strike, double rate, double dividend_yield, double vol,
+                          double maturity, int steps, bool is_call, bool american);
+double binomial_crr_price(double spot, double strike, double rate, double dividend_yield, double vol,
+                          double maturity, int steps, bool is_call, bool american);
+
+// Longstaff-Schwartz American option, basis {1, S/K, (S/K)^2} on in-the-money paths.
+// Deterministic for a given seed regardless of thread count.
+struct LsmResult {
+    double price  = 0.0;
+    double std_error = 0.0;
+    int    n_paths = 0;
+};
+LsmResult lsm_american_price(double spot, double strike, double rate, double dividend_yield, double vol,
+                             double maturity, int n_paths, int n_steps, bool is_call,
+                             uint64_t seed = 42, bool antithetic = true);
 double vol_surface_interp(std::span<const double> strikes,
                           std::span<const double> expiries,
                           std::span<const double> ivs,

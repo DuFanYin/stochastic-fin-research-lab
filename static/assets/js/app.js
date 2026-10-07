@@ -53,7 +53,7 @@ function applyPricingMode(isBatch) {
 document.getElementById("pricingModeSingle")?.addEventListener("click", () => applyPricingMode(false));
 document.getElementById("pricingModeBatch")?.addEventListener("click",  () => applyPricingMode(true));
 
-const validationPickIds = ["pickStats", "pickIto", "pickSimulation"];
+const validationPickIds = ["pickStats", "pickIto", "pickSimulation", "pickLattice"];
 
 const modeToggleIds = [
   ...validationPickIds,

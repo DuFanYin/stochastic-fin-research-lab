@@ -31,8 +31,17 @@ struct PricingResult {
     double bs         = 0.0;
     double binomial   = 0.0;
     double mc_std_err = 0.0;
-    double american   = 0.0;
+    double american   = 0.0;          // = american_binomial (kept for older clients)
     bool   has_american = false;
+    double trinomial  = 0.0;
+    bool   is_call    = true;
+    double american_binomial  = 0.0;
+    double american_trinomial = 0.0;
+    double american_pde       = 0.0;  // Crank-Nicolson + PSOR
+    double american_lsm       = 0.0;
+    double american_lsm_stderr = 0.0;
+    int    american_lsm_paths  = 0;
+    long long american_pde_psor_iterations = 0;
     double delta_bs   = 0.0;
     double gamma_bs   = 0.0;
     double theta_bs   = 0.0;

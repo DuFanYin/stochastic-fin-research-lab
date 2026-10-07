@@ -111,27 +111,60 @@ PricingResult run_pricing(const PricingParams& p) {
         r.bs = digital_call_bs_price(p.spot, p.strike, p.rate, p.vol, p.maturity, p.dividend_yield);
         r.mc = r.bs; r.binomial = r.bs;
     } else {
-        const double r_eff = p.rate - p.dividend_yield;
-        const bool is_call = (p.product_type != "european_put");
+        const double q     = p.dividend_yield;
+        const double r_eff = p.rate - q;
+        const bool is_call = p.option_type.empty() ? (p.product_type != "european_put") : (p.option_type != "put");
+        r.is_call = is_call;
         SamplerType sampler = SamplerType::Pseudorandom;
         if (p.mc_sampler == "antithetic") sampler = SamplerType::Antithetic;
         else if (p.mc_sampler == "sobol") sampler = SamplerType::Sobol;
-        r.mc      = mc_price_with_stderr(p.spot, p.strike, r_eff, p.vol, p.maturity, p.n_paths, &r.mc_std_err, is_call, sampler);
-        r.bs      = bs_closed_form_price(p.spot, p.strike, r_eff, p.vol, p.maturity, is_call);
-        r.binomial = binomial_price(p.spot, p.strike, r_eff, p.vol, p.maturity, steps, is_call);
-        pricing_greeks(p.spot, p.strike, r_eff, p.vol, p.maturity, p.dividend_yield,
+        // The BS / MC / binomial kernels take a single rate. Run them at r - q so
+        // the forward is right, then rescale: discounting at r - q instead of r
+        // overstates every European price by exactly exp(qT).
+        const double q_disc = std::exp(-q * p.maturity);
+        r.mc       = q_disc * mc_price_with_stderr(p.spot, p.strike, r_eff, p.vol, p.maturity, p.n_paths, &r.mc_std_err, is_call, sampler);
+        r.mc_std_err *= q_disc;
+        r.bs       = q_disc * bs_closed_form_price(p.spot, p.strike, r_eff, p.vol, p.maturity, is_call);
+        r.binomial = q_disc * binomial_price(p.spot, p.strike, r_eff, p.vol, p.maturity, steps, is_call);
+        r.trinomial = trinomial_price(p.spot, p.strike, p.rate, q, p.vol, p.maturity, steps, is_call, false);
+        pricing_greeks(p.spot, p.strike, p.rate, p.vol, p.maturity, q,
                        &r.delta_bs, &r.gamma_bs, &r.theta_bs, &r.vega_bs, &r.rho_bs);
+        if (!is_call) {
+            // Put greeks from the call greeks via put-call parity.
+            const double df_r = std::exp(-p.rate * p.maturity);
+            r.delta_bs -= q_disc;
+            r.theta_bs += p.rate * p.strike * df_r - q * p.spot * q_disc;
+            r.rho_bs   -= p.strike * p.maturity * df_r;
+        }
         pricing_error_decomp(r.mc, r.bs, r.binomial, &r.mc_minus_bs, &r.binomial_minus_bs);
         if (p.is_american) {
-            r.american     = binomial_american_price(p.spot, p.strike, r_eff, p.vol, p.maturity, steps, 0.0);
+            r.american_binomial  = binomial_crr_price(p.spot, p.strike, p.rate, q, p.vol, p.maturity, steps, is_call, true);
+            r.american_trinomial = trinomial_price(p.spot, p.strike, p.rate, q, p.vol, p.maturity, steps, is_call, true);
+            PdeSpec spec;
+            spec.spot = p.spot; spec.strike = p.strike; spec.rate = p.rate; spec.dividend_yield = q;
+            spec.vol = p.vol; spec.maturity = p.maturity; spec.s_steps = 200; spec.t_steps = std::max(200, steps);
+            spec.method = 0; spec.is_call = is_call; spec.american = true;
+            const PdeOutcome pde = pde_solve(spec);
+            r.american_pde = pde.price;
+            r.american_pde_psor_iterations = pde.psor_iterations;
+            const int lsm_paths = p.lsm_paths > 0 ? p.lsm_paths : std::clamp(p.n_paths, 1000, 200000);
+            const LsmResult lsm = lsm_american_price(p.spot, p.strike, p.rate, q, p.vol, p.maturity,
+                                                     lsm_paths, std::max(p.lsm_steps, 1), is_call);
+            r.american_lsm        = lsm.price;
+            r.american_lsm_stderr = lsm.std_error;
+            r.american_lsm_paths  = lsm.n_paths;
+            r.american     = r.american_binomial;
             r.has_american = true;
         }
     }
 
     if (p.fx_mode) {
         const double scale = 1.0 / std::max(p.spot, 1e-6);
-        r.mc *= scale; r.bs *= scale; r.binomial *= scale;
-        if (r.has_american) r.american *= scale;
+        r.mc *= scale; r.bs *= scale; r.binomial *= scale; r.trinomial *= scale;
+        if (r.has_american) {
+            r.american *= scale; r.american_binomial *= scale; r.american_trinomial *= scale;
+            r.american_pde *= scale; r.american_lsm *= scale; r.american_lsm_stderr *= scale;
+        }
     }
 
     r.spread     = std::max({r.mc, r.bs, r.binomial}) - std::min({r.mc, r.bs, r.binomial});
@@ -224,11 +257,13 @@ MultiLegResult run_multi_leg(const MultiLegParams& p) {
         lr.vol         = vol;
         lr.maturity    = t;
         lr.forward     = leg.forward > 0.0 ? leg.forward : 0.0;
-        lr.bs_price    = bs_closed_form_price(s, leg.strike, r_eff, vol, t, is_call);
-        lr.mc_price    = mc_price_full(s, leg.strike, r_eff, vol, t, p.n_paths, is_call);
+        // Kernels run at r - q for the forward; rescale the r - q discount to r.
+        const double q_disc = std::exp(-p.dividend_yield * t);
+        lr.bs_price    = q_disc * bs_closed_form_price(s, leg.strike, r_eff, vol, t, is_call);
+        lr.mc_price    = q_disc * mc_price_full(s, leg.strike, r_eff, vol, t, p.n_paths, is_call);
 
         double delta = 0.0, gamma = 0.0, theta = 0.0, vega = 0.0, rho = 0.0;
-        pricing_greeks(s, leg.strike, r_eff, vol, t, p.dividend_yield,
+        pricing_greeks(s, leg.strike, p.rate, vol, t, p.dividend_yield,
                        &delta, &gamma, &theta, &vega, &rho);
         if (!is_call) {
             // put delta = call delta - exp(-q*T)

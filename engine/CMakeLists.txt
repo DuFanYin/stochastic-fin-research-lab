@@ -23,6 +23,8 @@ add_library(sf_engine STATIC
     src/kernel/pricing/black_scholes.cpp
     src/kernel/pricing/monte_carlo.cpp
     src/kernel/pricing/binomial_lattice.cpp
+    src/kernel/pricing/trinomial_lattice.cpp
+    src/kernel/pricing/lsm_american.cpp
     src/kernel/pricing/greeks.cpp
     src/kernel/pricing/pde.cpp
     src/kernel/pricing/hedging.cpp

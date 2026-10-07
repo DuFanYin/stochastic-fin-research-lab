@@ -86,3 +86,7 @@ cmake --build engine/build -j
 - 计算层：核心计算已对接 C++ 动态库
 - Validation：已融合进 Compute 运行流程（前置校验/阻断）
 
+## 并发 bench
+
+`bench/concurrency/` 是独立的基准程序（不参与引擎构建），比较同一份 LSM 代码在单线程、OpenMP 和手写线程池下的耗时与峰值内存，以及无锁 SPSC 队列和加锁 ring buffer 的吞吐量。运行 `bench/concurrency/run.sh`，结果和结论见 `bench/concurrency/README.md`。
+

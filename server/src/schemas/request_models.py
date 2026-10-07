@@ -16,6 +16,9 @@ class PricingRequest(BaseModel):
     numeraire: str = "money_market"
     is_american: bool = False
     mc_sampler: str = "pseudorandom"  # "pseudorandom" | "antithetic" | "sobol"
+    option_type: Literal["call", "put"] = "call"
+    lsm_paths: int = Field(0, ge=0, le=2_000_000)   # American LSM; 0 = derive from n_paths
+    lsm_steps: int = Field(50, ge=1, le=1000)
 
 
 class PricingBatchRequest(BaseModel):
@@ -93,8 +96,9 @@ class PdeRequest(BaseModel):
     dividend_yield: float = Field(0.0, ge=-1.0, le=1.0)
     s_steps: int = Field(200, ge=40, le=2000)
     t_steps: int = Field(200, ge=40, le=4000)
-    method: str = "crank_nicolson"
-    option_type: str = "call"
+    method: Literal["crank_nicolson", "implicit", "explicit"] = "crank_nicolson"
+    option_type: Literal["call", "put"] = "call"
+    is_american: bool = False
 
 
 class ConvergenceRequest(BaseModel):
@@ -105,6 +109,7 @@ class ConvergenceRequest(BaseModel):
     maturity: float = Field(..., gt=0, le=100.0)
     dividend_yield: float = Field(0.0, ge=-1.0, le=1.0)
     step_ladder: list[int] = Field(default_factory=lambda: [10, 20, 40, 80, 120, 200, 320, 500], min_length=2, max_length=30)
+    option_type: Literal["call", "put"] = "call"
 
 
 class BenchmarkRequest(BaseModel):
@@ -119,6 +124,7 @@ class ValidationGateRequest(BaseModel):
     pick_stats: bool = False
     pick_ito: bool = False
     pick_simulation: bool = False
+    pick_lattice: bool = False
     compute_block_on_validation: bool = False
 
     spot: float = Field(..., gt=0)
