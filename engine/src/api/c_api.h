@@ -25,6 +25,7 @@ int sf_run_implied_vol_json(const char* request_json, char* out_response_json, i
 int sf_run_implied_vol_batch_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
 int sf_run_heston_calibrate_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
 int sf_run_heston_price_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
+int sf_run_screener_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
 
 // ── Thread control ────────────────────────────────────────────────────────────
 void sf_set_num_threads(int n_threads);

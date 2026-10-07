@@ -31,6 +31,8 @@ add_library(sf_engine STATIC
     src/kernel/optimizer/nelder_mead.cpp
     src/kernel/stats/moments.cpp
     src/kernel/stats/stochastic_checks.cpp
+    src/kernel/screener/option_filter.cpp
+    src/kernel/screener/strategies.cpp
     # Engine layer — domain workflows
     src/engine/pricing_engine.cpp
     src/engine/scenario_engine.cpp
@@ -38,6 +40,7 @@ add_library(sf_engine STATIC
     src/engine/validation_engine.cpp
     src/engine/utility_engine.cpp
     src/engine/calibration_engine.cpp
+    src/engine/screener_engine.cpp
     # API layer — JSON parse + serialize + dispatch (single file)
     src/api/parser.cpp
 )

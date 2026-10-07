@@ -2,6 +2,10 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <limits>
+#include <optional>
 #include <chrono>
 #include <expected>
 #include <ranges>
@@ -710,6 +714,237 @@ std::string run_vol_surface_json(const std::string& src, double t0_ms) {
     json jj = base_envelope(ctx->trace_id);
     jj["result_summary"] = {{"iv",r.iv},{"method",r.method},{"n_points",(int)p.strikes.size()}};
     jj["diagnostics"]    = diag_block(elapsed_ms(t0_ms), "vol_surface");
+    return jj.dump();
+}
+
+// ── Screener ──────────────────────────────────────────────────────────────────
+
+namespace {
+
+struct ScreenerParseError { std::string code; };
+
+double jnum_or_nan(const json& j, const char* key) {
+    if (!j.contains(key) || !j[key].is_number()) return std::numeric_limits<double>::quiet_NaN();
+    return j[key].get<double>();
+}
+
+std::optional<double> jopt_num(const json& j, const char* key) {
+    if (!j.contains(key) || j[key].is_null()) return std::nullopt;
+    if (!j[key].is_number()) throw ScreenerParseError{std::string("bad_number_") + key};
+    return j[key].get<double>();
+}
+
+// [lo, hi] -> active range; null -> inactive. Either bound may be null (open-ended).
+ScreenRange jrange(const json& j, const char* key) {
+    ScreenRange r;
+    if (!j.contains(key) || j[key].is_null()) return r;
+    const json& a = j[key];
+    if (!a.is_array() || a.size() != 2) throw ScreenerParseError{std::string("bad_range_") + key};
+    const auto bound = [&](const json& v, double open) {
+        if (v.is_null()) return open;
+        if (!v.is_number()) throw ScreenerParseError{std::string("bad_range_") + key};
+        return v.get<double>();
+    };
+    r.on = true;
+    r.lo = bound(a[0], -std::numeric_limits<double>::infinity());
+    r.hi = bound(a[1],  std::numeric_limits<double>::infinity());
+    return r;
+}
+
+ChainOption parse_chain_option(const json& o) {
+    ChainOption c;
+    std::string type = jv<std::string>(o, "option_type", "");
+    std::ranges::transform(type, type.begin(), [](unsigned char ch) { return std::tolower(ch); });
+    if (type != "call" && type != "put") throw ScreenerParseError{"bad_option_type"};
+    c.is_call = type == "call";
+    c.symbol  = jv<std::string>(o, "symbol", "");
+    c.expiry  = jv<std::string>(o, "expiry", "");
+    c.strike  = jv<double>(o, "strike", 0.0);
+    c.forward = jv<double>(o, "forward", 0.0);
+    c.years   = jv<double>(o, "years", 0.0);
+    c.bid     = jnum_or_nan(o, "bid");
+    c.ask     = jnum_or_nan(o, "ask");
+    c.mark    = jv<double>(o, "mark", 0.0);
+    c.iv      = jv<double>(o, "iv", 0.0);
+    c.volume  = jv<double>(o, "volume", 0.0);
+    c.oi      = jv<double>(o, "oi", 0.0);
+    c.delta   = jv<double>(o, "delta", 0.0);
+    c.gamma   = jv<double>(o, "gamma", 0.0);
+    c.theta   = jv<double>(o, "theta", 0.0);
+    c.vega    = jv<double>(o, "vega", 0.0);
+    if (c.strike <= 0.0) throw ScreenerParseError{"bad_strike"};
+    return c;
+}
+
+ScreenRankKey parse_rank_key(const std::string& k) {
+    if (k == "rr")          return ScreenRankKey::RR;
+    if (k == "gain")        return ScreenRankKey::Gain;
+    if (k == "loss")        return ScreenRankKey::Loss;
+    if (k == "cost")        return ScreenRankKey::Cost;
+    if (k == "credit")      return ScreenRankKey::Credit;
+    if (k == "edge")        return ScreenRankKey::Edge;
+    if (k == "forward_vol") return ScreenRankKey::ForwardVol;
+    throw ScreenerParseError{"bad_rank_key"};
+}
+
+ScreenerParams parse_screener_params(const json& j) {
+    ScreenerParams p;
+    p.spot           = jv<double>(j, "spot", 0.0);
+    p.rate           = jv<double>(j, "rate", 0.0);
+    p.multiplier     = jv<double>(j, "multiplier", 1.0);
+    p.compute_greeks = jv<bool>(j, "compute_greeks", true);
+    if (p.multiplier <= 0.0) throw ScreenerParseError{"bad_multiplier"};
+
+    const auto price_mode = jv<std::string>(j, "price_mode", "executable");
+    if (price_mode == "executable")  p.price_mode = ScreenPriceMode::Executable;
+    else if (price_mode == "mid")    p.price_mode = ScreenPriceMode::Mid;
+    else throw ScreenerParseError{"bad_price_mode"};
+
+    p.model_vol = jv<std::string>(j, "model_vol", "mark");
+    if (p.model_vol == "flat") {
+        p.model_vol_flat = jv<double>(j, "model_vol_flat", 0.0);
+        if (p.model_vol_flat <= 0.0) throw ScreenerParseError{"model_vol_flat_required"};
+    } else if (p.model_vol == "surface") {
+        const json s = j.value("surface", json::object());
+        for (const char* k : {"strikes", "expiries", "ivs"})
+            if (!s.contains(k) || !s[k].is_array()) throw ScreenerParseError{"surface_arrays_required"};
+        p.surface_strikes  = s["strikes"].get<std::vector<double>>();
+        p.surface_expiries = s["expiries"].get<std::vector<double>>();
+        p.surface_ivs      = s["ivs"].get<std::vector<double>>();
+        if (p.surface_strikes.empty() || p.surface_strikes.size() != p.surface_expiries.size()
+            || p.surface_strikes.size() != p.surface_ivs.size() || p.spot <= 0.0)
+            throw ScreenerParseError{"bad_surface"};
+    } else if (p.model_vol == "heston") {
+        const json h = j.value("heston", json::object());
+        p.heston.v0    = jv<double>(h, "v0",    p.heston.v0);
+        p.heston.kappa = jv<double>(h, "kappa", p.heston.kappa);
+        p.heston.theta = jv<double>(h, "theta", p.heston.theta);
+        p.heston.xi    = jv<double>(h, "xi",    p.heston.xi);
+        p.heston.rho   = jv<double>(h, "rho",   p.heston.rho);
+    } else if (p.model_vol != "mark" && p.model_vol != "none") {
+        throw ScreenerParseError{"bad_model_vol"};
+    }
+
+    if (!j["chain"].is_array()) throw ScreenerParseError{"chain_must_be_array"};
+    p.chain.reserve(j["chain"].size());
+    for (const auto& o : j["chain"]) p.chain.push_back(parse_chain_option(o));
+
+    const json st = j.value("strategies", json::object());
+    p.strategies.single_calls = jv<bool>(st, "single_calls", false);
+    p.strategies.iron_condors = jv<bool>(st, "iron_condors", false);
+    p.strategies.straddles    = jv<bool>(st, "straddles",    false);
+    p.strategies.strangles    = jv<bool>(st, "strangles",    false);
+    p.strategies.forward_vols = jv<bool>(st, "forward_vols", false);
+
+    const json of = j.value("option_filter", json::object());
+    auto& f = p.option_filter;
+    f.min_volume             = jopt_num(of, "min_volume");
+    f.min_oi                 = jopt_num(of, "min_oi");
+    f.min_price              = jopt_num(of, "min_price");
+    f.max_bid_ask_spread     = jopt_num(of, "max_bid_ask_spread");
+    f.max_bid_ask_spread_pct = jopt_num(of, "max_bid_ask_spread_pct");
+    if (of.contains("expiry") && of["expiry"].is_string()) f.expiry = of["expiry"].get<std::string>();
+    f.days_to_expiry    = jrange(of, "days_to_expiry_range");
+    f.volume_ratio      = jrange(of, "volume_ratio_range");
+    f.moneyness         = jrange(of, "moneyness_range");
+    f.require_two_sided = jv<bool>(of, "require_two_sided", true);
+
+    const json sf_ = j.value("strategy_filter", json::object());
+    auto& g = p.strategy_filter;
+    const auto direction = jv<std::string>(sf_, "direction", "LONG");
+    if (direction != "LONG" && direction != "SHORT") throw ScreenerParseError{"bad_direction"};
+    g.long_direction = direction == "LONG";
+    g.debit       = jrange(sf_, "debit_range");
+    g.credit      = jrange(sf_, "credit_range");
+    g.gain        = jrange(sf_, "potential_gain_range");
+    g.loss        = jrange(sf_, "potential_loss_range");
+    g.rr          = jrange(sf_, "rr_range");
+    g.net_delta   = jrange(sf_, "net_delta_range");
+    g.net_theta   = jrange(sf_, "net_theta_range");
+    g.net_vega    = jrange(sf_, "net_vega_range");
+    g.iv          = jrange(sf_, "iv_range");
+    g.forward_vol = jrange(sf_, "forward_vol_range");
+    g.edge        = jrange(sf_, "edge_range");
+
+    const json rk = j.value("rank", json::object());
+    p.rank.key = parse_rank_key(jv<std::string>(rk, "key", "rr"));
+    // Natural order: smallest loss / cost first, largest of everything else first.
+    const bool natural_desc = p.rank.key != ScreenRankKey::Loss && p.rank.key != ScreenRankKey::Cost;
+    p.rank.descending = jv<bool>(rk, "descending", natural_desc);
+    p.rank.top_n      = std::clamp(jv<int>(rk, "top_n", 20), 1, 500);
+    return p;
+}
+
+json screened_leg_json(const ScreenedLeg& l) {
+    return {
+        {"symbol", l.symbol}, {"option_type", l.option_type}, {"expiry", l.expiry},
+        {"strike", l.strike}, {"years", l.years}, {"forward", l.forward}, {"qty", l.qty},
+        {"fill_price", l.fill_price}, {"mark", l.mark}, {"iv", l.iv}, {"model_price", l.model_price},
+        {"delta", l.delta}, {"gamma", l.gamma}, {"theta", l.theta}, {"vega", l.vega},
+    };
+}
+
+}  // namespace
+
+std::string run_screener_json(const std::string& src, double t0_ms) {
+    const auto ctx = prepare_request(src, {"spot", "chain"}, "missing_required_screener_fields");
+    if (!ctx) return ctx.error();
+    ScreenerParams p;
+    try {
+        p = parse_screener_params(ctx->body);
+    } catch (const ScreenerParseError& e) {
+        return err_response(ctx->trace_id, e.code);
+    } catch (const json::exception&) {
+        return err_response(ctx->trace_id, "bad_screener_request");
+    }
+    const std::string model_vol  = p.model_vol;
+    const double      multiplier = p.multiplier;
+    const bool        mid_mode   = p.price_mode == ScreenPriceMode::Mid;
+    const std::string rank_key   = jv<std::string>(ctx->body.value("rank", json::object()), "key", "rr");
+    const bool        rank_desc  = p.rank.descending;
+
+    const auto r = run_screener(std::move(p));
+
+    json by_kind = json::object();
+    for (const auto& k : r.by_kind) by_kind[k.kind] = {{"generated", k.generated}, {"passed", k.passed}};
+
+    json strategies = json::array();
+    for (size_t i = 0; i < r.top.size(); ++i) {
+        const auto& s = r.top[i];
+        json legs = json::array();
+        for (const auto& l : s.legs) legs.push_back(screened_leg_json(l));
+        // Non-finite values (unbounded gain/loss, missing model) serialize as null.
+        strategies.push_back({
+            {"rank", static_cast<int>(i) + 1}, {"kind", s.kind}, {"direction", s.direction},
+            {"label", s.label}, {"legs", legs},
+            {"debit", s.debit}, {"credit", s.credit}, {"cost", s.cost},
+            {"max_gain", s.max_gain}, {"max_loss", s.max_loss}, {"rr", s.rr},
+            {"max_gain_unbounded", std::isinf(s.max_gain)}, {"max_loss_unbounded", std::isinf(s.max_loss)},
+            {"net_delta", s.net_delta}, {"net_gamma", s.net_gamma},
+            {"net_theta", s.net_theta}, {"net_vega", s.net_vega},
+            {"avg_iv", s.avg_iv}, {"model_value", s.model_value}, {"edge", s.edge},
+            {"forward_vol", s.forward_vol},
+        });
+    }
+
+    json jj = base_envelope(ctx->trace_id);
+    jj["contract_version"] = "v1.3";
+    jj["result_summary"] = {
+        {"n_options_in",           r.n_options_in},
+        {"n_options_after_filter", r.n_options_after_filter},
+        {"n_generated",            r.n_generated},
+        {"n_passed",               r.n_passed},
+        {"n_returned",             static_cast<int>(r.top.size())},
+        {"by_kind",                by_kind},
+        {"rank_key",               rank_key},
+        {"rank_descending",        rank_desc},
+        {"model_vol",              model_vol},
+        {"price_mode",             mid_mode ? "mid" : "executable"},
+        {"multiplier",             multiplier},
+        {"engine_runtime_ms",      r.runtime_ms},
+    };
+    jj["result_details"] = {{"strategies", strategies}};
+    jj["diagnostics"]    = diag_block(elapsed_ms(t0_ms), "screener");
     return jj.dump();
 }
 

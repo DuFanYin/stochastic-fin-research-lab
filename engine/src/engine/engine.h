@@ -1,6 +1,7 @@
 #pragma once
 
 #include "contracts/contracts.h"
+#include "kernel/screener/screener.h"
 #include <string>
 #include <vector>
 
@@ -289,5 +290,29 @@ MeasureDensityResult run_measure_density (const MeasureDensityParams& p);
 MeasureCompareResult run_measure_compare (const MeasureCompareParams& p);
 PdeResult            run_pde             (const PdeParams& p);
 VolSurfaceResult     run_vol_surface     (const VolSurfaceParams& p);
+
+// ── ScreenerEngine ────────────────────────────────────────────────────────────
+
+struct ScreenerParams {
+    double spot       = 0.0;
+    double rate       = 0.0;
+    double multiplier = 1.0;                 // Deribit: 1 contract = 1 BTC / ETH
+    ScreenPriceMode price_mode = ScreenPriceMode::Executable;
+    bool   compute_greeks = true;            // false: keep greeks supplied with the chain
+    // Reference volatility for model_value / edge:
+    //   "mark" (each option's own iv) | "flat" | "surface" | "heston" | "none"
+    std::string model_vol = "mark";
+    double model_vol_flat = 0.0;
+    std::vector<double> surface_strikes, surface_expiries, surface_ivs;
+    HestonPriceParams heston;                // spot / strike / maturity / rate ignored
+    std::vector<ChainOption> chain;
+    ScreenStrategyToggles strategies;
+    ScreenOptionFilter    option_filter;
+    ScreenStrategyFilter  strategy_filter;
+    ScreenRank            rank;
+};
+
+// Takes params by value: greeks are written into the chain copy.
+ScreenerResult run_screener(ScreenerParams p);
 
 }  // namespace sf

@@ -16,6 +16,9 @@ def _load_lib() -> CDLL | None:
 
 _lib = _load_lib()
 
+# Initial response buffer; run_engine_task grows it once if the engine asks for more.
+_INITIAL_BUFFER = 1_000_000
+
 if _lib is not None:
     _TASK_TO_SYMBOL = {
         "pricing": "sf_run_pricing_json",
@@ -37,6 +40,7 @@ if _lib is not None:
         "implied_vol_batch":   "sf_run_implied_vol_batch_json",
         "heston_calibrate":    "sf_run_heston_calibrate_json",
         "heston_price":        "sf_run_heston_price_json",
+        "screener":            "sf_run_screener_json",
     }
     for _sym in _TASK_TO_SYMBOL.values():
         fn = getattr(_lib, _sym)
@@ -92,10 +96,19 @@ def run_engine_task(task_type: str, payload: dict) -> dict:
         }
 
     raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    cap = 1_000_000
+    cap = _INITIAL_BUFFER
     buf = create_string_buffer(cap)
     written = c_int(0)
     rc = int(getattr(_lib, symbol)(c_char_p(raw), buf, cap, byref(written)))
+    for _ in range(3):
+        if rc != 1:
+            break
+        # Response larger than the buffer: the engine reported the size it needs.
+        # The rerun can come out a few bytes longer (timings are part of the
+        # response), so leave headroom instead of allocating exactly that size.
+        cap = written.value + written.value // 4 + 4096
+        buf = create_string_buffer(cap)
+        rc = int(getattr(_lib, symbol)(c_char_p(raw), buf, cap, byref(written)))
     if rc != 0:
         return {
             "contract_version": "v1",
@@ -513,6 +526,16 @@ def heston_calibrate(
         "model_prices":  rd.get("model_prices", []),
         "residuals":     rd.get("residuals",    []),
     }
+
+
+def screener(request: dict) -> dict:
+    """Run the C++ strategy screener.
+
+    `request` follows the sf_run_screener_json contract (chain + filters + rank).
+    Returns the raw engine envelope so callers can surface engine error codes
+    (e.g. bad_range_rr_range) instead of an empty result.
+    """
+    return run_engine_task("screener", request)
 
 
 def run_convergence_steps(

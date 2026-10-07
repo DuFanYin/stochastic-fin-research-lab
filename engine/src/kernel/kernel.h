@@ -7,6 +7,8 @@
 #include <span>
 #include <vector>
 
+#include "kernel/screener/screener.h"
+
 namespace sf {
 
 // ── Optimizer ─────────────────────────────────────────────────────────────────

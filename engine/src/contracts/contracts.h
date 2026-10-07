@@ -246,4 +246,48 @@ struct GreekSurfaceResult {
     double runtime_ms = 0.0;
 };
 
+// ── Screener ──────────────────────────────────────────────────────────────────
+
+struct ScreenedLeg {
+    std::string symbol;
+    std::string option_type;   // "call" | "put"
+    std::string expiry;
+    double strike      = 0.0;
+    double years       = 0.0;
+    double forward     = 0.0;
+    int    qty         = 0;    // +1 buy / -1 sell (per contract)
+    double fill_price  = 0.0;  // price used for cost (ask/bid or mid), per 1 unit
+    double mark        = 0.0;
+    double iv          = 0.0;
+    double model_price = 0.0;  // per 1 unit; NaN if no model
+    double delta = 0.0, gamma = 0.0, theta = 0.0, vega = 0.0;
+};
+
+struct ScreenedStrategy {
+    std::string kind;          // single | iron_condor | straddle | strangle | forward_vol
+    std::string direction;     // LONG | SHORT
+    std::string label;
+    std::vector<ScreenedLeg> legs;
+    double debit = 0.0, credit = 0.0, cost = 0.0;
+    double max_gain = 0.0, max_loss = 0.0, rr = 0.0;
+    double net_delta = 0.0, net_gamma = 0.0, net_theta = 0.0, net_vega = 0.0;
+    double avg_iv = 0.0, model_value = 0.0, edge = 0.0, forward_vol = 0.0;
+};
+
+struct ScreenerKindCount {
+    std::string kind;
+    long long   generated = 0;
+    long long   passed    = 0;
+};
+
+struct ScreenerResult {
+    std::vector<ScreenedStrategy>  top;
+    std::vector<ScreenerKindCount> by_kind;
+    int       n_options_in           = 0;
+    int       n_options_after_filter = 0;
+    long long n_generated            = 0;
+    long long n_passed               = 0;
+    double    runtime_ms             = 0.0;
+};
+
 }  // namespace sf

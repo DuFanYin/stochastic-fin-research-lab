@@ -136,7 +136,7 @@ The `_TASK_TO_SYMBOL` dict in `engine_client.py` is the single registry of C++ c
 
 ## C++ Build Notes
 
-The `CMakeLists.txt` currently compiles all `src/**/*.cpp` via a glob. New kernel files (`heston.cpp`, `nelder_mead.cpp`, `sobol.cpp`) will be picked up automatically. New directories (`kernel/optimizer/`, `kernel/calibration/`) must be added to the glob pattern or listed explicitly.
+The `CMakeLists.txt` lists every source file explicitly (no glob). Every new `.cpp` file must be added to the `sf_engine` source list by hand.
 
 The Nelder-Mead optimizer uses `std::function` for the objective — this requires C++17 or later (already satisfied by the C++23 build).
 

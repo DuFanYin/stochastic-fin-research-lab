@@ -1,11 +1,11 @@
 """
-market_data.py — live BTC market data fetcher.
+market_data.py — live crypto market data fetcher (BTC, plus ETH for spot / DVOL / options).
 
 Sources
 -------
-1. BTC/USD spot          — Binance REST
-2. BTC DVOL index        — Deribit REST  (index-level scalar vol)
-3. BTC options IV surface— Deribit REST  (per-strike/expiry implied vol)
+1. Spot (BTC, ETH)       — Binance REST
+2. DVOL index            — Deribit REST  (index-level scalar vol)
+3. Option chain + IV surface — Deribit REST (full chain in two bulk requests)
 4. BTC perpetual funding — Binance Futures REST  (→ real-world drift mu)
 5. USD rate term structure— US Treasury FiscalData REST (1M/3M/6M/1Y tenors)
 
@@ -15,10 +15,14 @@ All requests have short timeouts and graceful fallbacks.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
+import os
+import statistics
 import xml.etree.ElementTree as ET  # used in _fetch_rate_curve
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -32,6 +36,7 @@ _slow_client = httpx.AsyncClient(timeout=20.0)  # for slow government endpoints
 # ── Fallback constants ────────────────────────────────────────────────────────
 _FB_SPOT    = 65_000.0
 _FB_VOL     = 0.80
+_FB_SPOT_BY_CCY = {"BTC": _FB_SPOT, "ETH": 2_500.0}
 _FB_RATE    = 0.045
 _FB_FUNDING = 0.0001   # ~10 bps per 8 h — typical neutral funding
 
@@ -45,25 +50,34 @@ def _years_to_expiry(expiry_ts_ms: int) -> float:
 
 # ── 1. Spot ───────────────────────────────────────────────────────────────────
 
-async def _fetch_btc_spot() -> float:
+async def _fetch_spot(currency: str = "BTC") -> float:
     url = "https://api.binance.com/api/v3/ticker/price"
+    fallback = _FB_SPOT_BY_CCY.get(currency, _FB_SPOT)
     try:
-        r = await _client.get(url, params={"symbol": "BTCUSDT"})
+        r = await _client.get(url, params={"symbol": f"{currency}USDT"})
         r.raise_for_status()
         return float(r.json()["price"])
     except Exception as exc:
-        log.warning("BTC spot failed (%s), fallback %.0f", exc, _FB_SPOT)
-        return _FB_SPOT
+        log.warning("%s spot failed (%s), fallback %.0f", currency, exc, fallback)
+        return fallback
+
+
+async def _fetch_btc_spot() -> float:
+    return await _fetch_spot("BTC")
 
 
 # ── 2. DVOL index ─────────────────────────────────────────────────────────────
 
 async def _fetch_btc_dvol() -> float:
-    """Deribit DVOL — BTC VIX equivalent. Returns annualised decimal."""
+    return await _fetch_dvol("BTC")
+
+
+async def _fetch_dvol(currency: str = "BTC") -> float:
+    """Deribit DVOL — crypto VIX equivalent (BTC or ETH). Returns annualised decimal."""
     url = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
     now_ms   = int(datetime.now(timezone.utc).timestamp() * 1000)
     start_ms = now_ms - 2 * 3_600_000
-    params   = {"currency": "BTC", "resolution": "3600",
+    params   = {"currency": currency, "resolution": "3600",
                 "start_timestamp": start_ms, "end_timestamp": now_ms}
     try:
         r = await _client.get(url, params=params)
@@ -77,151 +91,327 @@ async def _fetch_btc_dvol() -> float:
         return _FB_VOL
 
 
-# ── 3. Options IV surface ─────────────────────────────────────────────────────
+# ── 3. Option chain (Deribit) and IV surface ─────────────────────────────────
+#
+# The full chain comes from two bulk public endpoints joined on instrument_name:
+#   get_instruments                -> strike, option_type, expiration_timestamp
+#   get_book_summary_by_currency   -> bid / ask / mark (in coin), mark_iv, volume,
+#                                     open_interest, underlying_price (per-expiry forward)
+# Deribit quotes option prices in the base coin; USD = coin price × underlying_price
+# (the expiry's forward), which matches Deribit's own Black-76 marks. Deribit prices
+# with interest_rate = 0, which is carried through as the chain's default rate.
 
-async def _fetch_options_instruments() -> list[dict]:
-    """Return all live BTC option instruments from Deribit."""
+SUPPORTED_CURRENCIES = ("BTC", "ETH")
+
+_CHAIN_TTL      = 60.0                 # seconds; crypto trades 24/7
+_CHAIN_KEEP     = 20                   # on-disk snapshots kept per currency
+_IV_VALID_RANGE = (0.05, 5.0)          # mark_iv outside this is treated as unknown
+_FIXTURE_DIR    = Path(__file__).resolve().parents[2] / "fixtures"
+
+
+def _chain_cache_dir() -> Path:
+    home = Path(os.environ.get("QUANT_LAB_HOME", Path.home() / ".quant-lab"))
+    return home / "chains"
+
+
+_CHAIN_MEMO: dict[str, tuple[float, dict]] = {}   # currency -> (monotonic time, chain)
+
+
+class ChainUnavailable(RuntimeError):
+    """No live chain, no cached snapshot and no fixture for the currency."""
+
+
+def _check_currency(currency: str) -> str:
+    cur = currency.upper()
+    if cur not in SUPPORTED_CURRENCIES:
+        raise ValueError(f"unsupported currency: {currency}")
+    return cur
+
+
+async def _fetch_options_instruments(currency: str = "BTC") -> list[dict]:
+    """Return all live option instruments for the currency from Deribit."""
     url = "https://www.deribit.com/api/v2/public/get_instruments"
-    params = {"currency": "BTC", "kind": "option", "expired": "false"}
+    params = {"currency": currency, "kind": "option", "expired": "false"}
     r = await _client.get(url, params=params)
     r.raise_for_status()
     return r.json().get("result", [])
 
 
-async def _fetch_iv_for_instrument(name: str) -> float | None:
-    """Return mark IV (decimal) for a single instrument, or None on failure."""
-    url = "https://www.deribit.com/api/v2/public/get_order_book"
+async def _fetch_book_summaries(currency: str = "BTC") -> list[dict]:
+    """Return the book summary (quotes, mark, IV, volume, OI) of every option in one call."""
+    url = "https://www.deribit.com/api/v2/public/get_book_summary_by_currency"
+    r = await _client.get(url, params={"currency": currency, "kind": "option"})
+    r.raise_for_status()
+    return r.json().get("result", [])
+
+
+def _positive(v: Any) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
+
+
+def normalize_deribit_chain(instruments: list[dict], summaries: list[dict],
+                            now_ms: float | None = None) -> list[dict]:
+    """
+    Join Deribit instruments and book summaries into screener chain rows
+    (the ChainOption shape of sf_run_screener_json). All prices are USD per 1 coin.
+
+    - bid / ask are None when that side has no quote (Deribit sends null or 0)
+    - iv is 0.0 when mark_iv is missing or outside _IV_VALID_RANGE
+    - volume / oi are in coins, not contracts
+    - expired instruments and rows without an underlying price are dropped
+    - prices convert at each row's own underlying_price (what Deribit marked it with),
+      but `forward` is the per-expiry median: the bulk endpoint is not an atomic
+      snapshot, so rows of one expiry carry slightly different underlying prices
+    """
+    if now_ms is None:
+        now_ms = datetime.now(timezone.utc).timestamp() * 1000
+    by_name = {i["instrument_name"]: i for i in instruments if i.get("instrument_name")}
+    rows: list[dict] = []
+    for s in summaries:
+        name = s.get("instrument_name", "")
+        inst = by_name.get(name)
+        forward = _positive(s.get("underlying_price"))
+        if inst is None or forward is None:
+            continue
+        expiry_ms = inst.get("expiration_timestamp") or 0
+        if expiry_ms <= now_ms:
+            continue
+        bid, ask = _positive(s.get("bid_price")), _positive(s.get("ask_price"))
+        mark = _positive(s.get("mark_price")) or 0.0
+        iv_pct = s.get("mark_iv")
+        iv = float(iv_pct) / 100.0 if isinstance(iv_pct, (int, float)) else 0.0
+        if not (_IV_VALID_RANGE[0] < iv < _IV_VALID_RANGE[1]):
+            iv = 0.0
+        rows.append({
+            "symbol":      name,
+            "option_type": inst.get("option_type", ""),
+            "expiry":      name.split("-")[1] if name.count("-") >= 3 else "",
+            "expiry_ts":   expiry_ms,
+            "strike":      float(inst["strike"]),
+            "forward":     forward,
+            "years":       max((expiry_ms - now_ms) / 1000 / (365.25 * 24 * 3600), 1e-6),
+            "bid":         bid * forward if bid is not None else None,
+            "ask":         ask * forward if ask is not None else None,
+            "mark":        mark * forward,
+            "iv":          iv,
+            "volume":      float(s.get("volume") or 0.0),
+            "oi":          float(s.get("open_interest") or 0.0),
+        })
+    by_expiry: dict[str, list[float]] = {}
+    for r in rows:
+        by_expiry.setdefault(r["expiry"], []).append(r["forward"])
+    medians = {e: statistics.median(v) for e, v in by_expiry.items()}
+    for r in rows:
+        r["forward"] = medians[r["expiry"]]
+    rows.sort(key=lambda r: (r["expiry_ts"], r["strike"], r["option_type"]))
+    return rows
+
+
+def _expiry_table(chain: list[dict], spot: float) -> list[dict]:
+    """Per-expiry forward and the carry it implies: r_implied = ln(F/S) / T (diagnostic only)."""
+    seen: dict[str, dict] = {}
+    for r in chain:
+        if r["expiry"] not in seen:
+            carry = math.log(r["forward"] / spot) / r["years"] if spot > 0 else None
+            seen[r["expiry"]] = {
+                "expiry": r["expiry"], "years": round(r["years"], 6),
+                "forward": r["forward"],
+                "implied_carry": round(carry, 6) if carry is not None else None,
+                "n_options": 0,
+            }
+        seen[r["expiry"]]["n_options"] += 1
+    return list(seen.values())
+
+
+def _build_chain(currency: str, instruments: list[dict], summaries: list[dict],
+                 fetched_at: datetime, source: str) -> dict:
+    now_ms = fetched_at.timestamp() * 1000
+    chain = normalize_deribit_chain(instruments, summaries, now_ms)
+    # Deribit index price; every summary row carries the same value
+    spot = next((float(s["estimated_delivery_price"]) for s in summaries
+                 if _positive(s.get("estimated_delivery_price"))), 0.0)
+    rate = next((float(s["interest_rate"]) for s in summaries
+                 if isinstance(s.get("interest_rate"), (int, float))), 0.0)
+    return {
+        "currency":      currency,
+        "source":        source,             # live | cache | fixture
+        "fetched_at":    fetched_at.isoformat(),
+        "spot":          spot,
+        "rate":          rate,               # Deribit pricing rate (0 in practice)
+        "multiplier":    1.0,                # 1 contract = 1 coin
+        "n_instruments": len(instruments),
+        "expiries":      _expiry_table(chain, spot),
+        "chain":         chain,
+    }
+
+
+def _write_snapshot(chain: dict) -> None:
     try:
-        r = await _client.get(url, params={"instrument_name": name, "depth": 1})
-        r.raise_for_status()
-        iv_pct = r.json().get("result", {}).get("mark_iv")
-        if iv_pct is None:
-            return None
-        return float(iv_pct) / 100.0
-    except Exception:
-        return None
+        d = _chain_cache_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.fromisoformat(chain["fetched_at"]).strftime("%Y%m%d_%H%M%S")
+        path = d / f"{chain['currency']}_{stamp}.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(chain, separators=(",", ":")))
+        tmp.replace(path)
+        for old in sorted(d.glob(f"{chain['currency']}_*.json"))[:-_CHAIN_KEEP]:
+            old.unlink(missing_ok=True)
+    except OSError as exc:
+        log.warning("Chain snapshot write failed (%s)", exc)
 
 
-async def fetch_iv_surface(spot: float, strikes_per_expiry: int = 7) -> dict[str, Any]:
+def list_chain_snapshots(currency: str | None = None) -> list[dict]:
+    """On-disk snapshots, newest first: [{"snapshot_id", "currency", "path"}]."""
+    d = _chain_cache_dir()
+    if not d.exists():
+        return []
+    pattern = f"{_check_currency(currency)}_*.json" if currency else "*_*.json"
+    return [{"snapshot_id": p.stem, "currency": p.stem.split("_")[0], "path": str(p)}
+            for p in sorted(d.glob(pattern), reverse=True)]
+
+
+def load_chain_snapshot(snapshot_id: str) -> dict:
+    """Load a cached snapshot by id (file stem), as returned by list_chain_snapshots()."""
+    if "/" in snapshot_id or "\\" in snapshot_id or snapshot_id.startswith("."):
+        raise ValueError("bad snapshot id")
+    path = _chain_cache_dir() / f"{snapshot_id}.json"
+    chain = json.loads(path.read_text())
+    chain["source"] = "cache"
+    return chain
+
+
+def load_chain_fixture(currency: str = "BTC") -> dict:
+    """Recorded raw Deribit responses (server/fixtures/deribit_<cur>_chain.json), normalized."""
+    cur = _check_currency(currency)
+    raw = json.loads((_FIXTURE_DIR / f"deribit_{cur.lower()}_chain.json").read_text())
+    fetched_at = datetime.fromisoformat(raw["fetched_at"])
+    return _build_chain(cur, raw["instruments"], raw["summaries"], fetched_at, "fixture")
+
+
+async def fetch_option_chain(currency: str = "BTC", *, allow_stale: bool = True) -> dict:
+    """
+    Full option chain for BTC or ETH in two HTTP requests.
+
+    Fresh results are memoized for _CHAIN_TTL seconds and written to
+    ~/.quant-lab/chains/ (override with QUANT_LAB_HOME). When Deribit is
+    unreachable and allow_stale is true, falls back to the newest on-disk
+    snapshot, then to the bundled fixture; `source` and `fetched_at` say which.
+    """
+    import time
+    cur = _check_currency(currency)
+    memo = _CHAIN_MEMO.get(cur)
+    if memo is not None and time.monotonic() - memo[0] < _CHAIN_TTL:
+        return memo[1]
+
+    try:
+        instruments, summaries = await asyncio.gather(
+            _fetch_options_instruments(cur), _fetch_book_summaries(cur),
+        )
+        if not summaries:
+            raise ValueError("empty book summary")
+        chain = _build_chain(cur, instruments, summaries, datetime.now(timezone.utc), "live")
+        _CHAIN_MEMO[cur] = (time.monotonic(), chain)
+        _write_snapshot(chain)
+        return chain
+    except Exception as exc:
+        log.warning("%s option chain failed (%s)", cur, exc)
+        if not allow_stale:
+            raise ChainUnavailable(f"{cur} option chain unavailable: {exc}") from exc
+
+    for snap in list_chain_snapshots(cur):
+        try:
+            return load_chain_snapshot(snap["snapshot_id"])
+        except (OSError, ValueError) as exc:
+            log.warning("Snapshot %s unreadable (%s)", snap["snapshot_id"], exc)
+    try:
+        return load_chain_fixture(cur)
+    except (OSError, ValueError, KeyError) as exc:
+        raise ChainUnavailable(f"{cur} option chain unavailable and no snapshot/fixture") from exc
+
+
+async def fetch_iv_surface(spot: float, strikes_per_expiry: int = 7,
+                           currency: str = "BTC") -> dict[str, Any]:
     """
     Build an IV surface with multiple strikes per expiry so the C++ engine
-    can bilinearly interpolate in both K and T dimensions.
+    can bilinearly interpolate in both K and T dimensions. Built from the
+    live chain only (a stale snapshot could sit at a different price level).
 
     Returns
     -------
     {
       "surface": [
-        {"expiry": "27JUN25", "strike": 65000, "years": 0.19, "iv": 0.83, "iv_pct": 83.0},
-        ...  # multiple rows per expiry, spread around ATM
+        {"expiry": "27JUN25", "instrument": "BTC-27JUN25-65000-C", "strike": 65000,
+         "years": 0.19, "iv": 0.83, "iv_pct": 83.0},
+        ...  # multiple rows per expiry, spread around ATM, expiries in time order
       ],
       "raw_instruments_count": 412,
     }
     """
     try:
-        instruments = await _fetch_options_instruments()
+        data = await fetch_option_chain(currency, allow_stale=False)
     except Exception as exc:
-        log.warning("Options instruments failed (%s)", exc)
+        log.warning("Options chain failed for IV surface (%s)", exc)
         return {"surface": [], "raw_instruments_count": 0}
 
-    # Group calls by expiry, keep all strikes
-    calls_by_expiry: dict[str, dict] = {}
-    for inst in instruments:
-        if inst.get("option_type") != "call":
-            continue
-        expiry = inst.get("expiry_date", "") or inst["instrument_name"].split("-")[1]
-        expiry_ts = inst.get("expiration_timestamp", 0)
-        years = _years_to_expiry(expiry_ts) if expiry_ts else 0.0
-        if expiry not in calls_by_expiry:
-            calls_by_expiry[expiry] = {"years": years, "calls": []}
-        calls_by_expiry[expiry]["calls"].append(inst)
-
-    # For each expiry, pick N strikes centered around ATM
-    fetch_tasks: list[tuple[str, float, str]] = []  # (expiry, years, instrument_name)
-    for expiry, info in sorted(calls_by_expiry.items()):
-        years = info["years"]
-        calls_sorted = sorted(info["calls"], key=lambda i: abs(float(i["strike"]) - spot))
-        chosen = calls_sorted[:strikes_per_expiry]
-        for inst in chosen:
-            fetch_tasks.append((expiry, years, inst["instrument_name"], float(inst["strike"])))
-
-    if not fetch_tasks:
-        return {"surface": [], "raw_instruments_count": len(instruments)}
-
-    # Fetch all IVs concurrently
-    names = [t[2] for t in fetch_tasks]
-    ivs = await asyncio.gather(*[_fetch_iv_for_instrument(n) for n in names])
+    calls_by_expiry: dict[str, list[dict]] = {}
+    for row in data["chain"]:
+        if row["option_type"] == "call" and row["iv"] > 0:
+            calls_by_expiry.setdefault(row["expiry"], []).append(row)
 
     surface = []
-    for (expiry, years, name, strike), iv in zip(fetch_tasks, ivs):
-        if iv is None:
-            continue
-        surface.append({
-            "expiry":     expiry,
-            "instrument": name,
-            "strike":     strike,
-            "years":      round(years, 4),
-            "iv":         round(iv, 4),
-            "iv_pct":     round(iv * 100, 2),
-        })
-
-    return {
-        "surface": surface,
-        "raw_instruments_count": len(instruments),
-    }
+    for rows in calls_by_expiry.values():          # chain is already in expiry order
+        chosen = sorted(rows, key=lambda r: abs(r["strike"] - spot))[:strikes_per_expiry]
+        for row in chosen:
+            surface.append({
+                "expiry":     row["expiry"],
+                "instrument": row["symbol"],
+                "strike":     row["strike"],
+                "years":      round(row["years"], 4),
+                "iv":         round(row["iv"], 4),
+                "iv_pct":     round(row["iv"] * 100, 2),
+            })
+    return {"surface": surface, "raw_instruments_count": data["n_instruments"]}
 
 
-async def fetch_iv_smile_slice(spot: float, target_years: float, center_strike: float, n_points: int = 11) -> dict[str, Any]:
+async def fetch_iv_smile_slice(spot: float, target_years: float, center_strike: float,
+                               n_points: int = 11, currency: str = "BTC") -> dict[str, Any]:
     """
     Build a same-expiry strike slice (smile proxy) near target maturity.
     Returns rows sorted by strike with mark IV values.
     """
+    empty = {"rows": [], "selected_expiry": "", "selected_years": 0.0}
     try:
-        instruments = await _fetch_options_instruments()
+        data = await fetch_option_chain(currency, allow_stale=False)
     except Exception as exc:
-        log.warning("Options instruments failed for smile slice (%s)", exc)
-        return {"rows": [], "selected_expiry": "", "selected_years": 0.0}
+        log.warning("Options chain failed for smile slice (%s)", exc)
+        return empty
 
-    calls: list[dict[str, Any]] = [i for i in instruments if i.get("option_type") == "call"]
-    if not calls:
-        return {"rows": [], "selected_expiry": "", "selected_years": 0.0}
+    calls_by_expiry: dict[str, list[dict]] = {}
+    for row in data["chain"]:
+        if row["option_type"] == "call":
+            calls_by_expiry.setdefault(row["expiry"], []).append(row)
+    if not calls_by_expiry:
+        return empty
 
-    expiry_rows: dict[str, dict[str, Any]] = {}
-    for inst in calls:
-        expiry = inst.get("expiry_date") or inst.get("instrument_name", "").split("-")[1]
-        expiry_ts = inst.get("expiration_timestamp", 0)
-        years = _years_to_expiry(expiry_ts) if expiry_ts else 0.0
-        if expiry not in expiry_rows:
-            expiry_rows[expiry] = {"years": years, "calls": []}
-        expiry_rows[expiry]["calls"].append(inst)
+    selected_expiry = min(calls_by_expiry, key=lambda e: abs(calls_by_expiry[e][0]["years"] - target_years))
+    calls = calls_by_expiry[selected_expiry]
+    selected_years = float(calls[0]["years"])
+    pick_n = max(5, min(n_points, len(calls)))
+    chosen = sorted(sorted(calls, key=lambda r: abs(r["strike"] - center_strike))[:pick_n],
+                    key=lambda r: r["strike"])
 
-    selected_expiry = min(expiry_rows.keys(), key=lambda e: abs(expiry_rows[e]["years"] - target_years))
-    selected_years = float(expiry_rows[selected_expiry]["years"])
-    selected_calls = sorted(expiry_rows[selected_expiry]["calls"], key=lambda i: abs(float(i["strike"]) - center_strike))
-    pick_n = max(5, min(n_points, len(selected_calls)))
-    chosen = selected_calls[:pick_n]
-    chosen = sorted(chosen, key=lambda i: float(i["strike"]))
-
-    names = [c["instrument_name"] for c in chosen]
-    ivs = await asyncio.gather(*[_fetch_iv_for_instrument(n) for n in names])
-    rows = []
-    for inst, iv in zip(chosen, ivs):
-        if iv is None:
-            continue
-        rows.append(
-            {
-                "instrument": inst["instrument_name"],
-                "strike": float(inst["strike"]),
-                "years": round(selected_years, 4),
-                "log_moneyness": round(math.log(max(float(inst["strike"]), 1e-8) / max(spot, 1e-8)), 6),
-                "iv": round(iv, 6),
-                "iv_pct": round(iv * 100, 3),
-            }
-        )
-    return {
-        "rows": rows,
-        "selected_expiry": selected_expiry,
-        "selected_years": round(selected_years, 4),
-    }
+    rows = [
+        {
+            "instrument": r["symbol"],
+            "strike": r["strike"],
+            "years": round(selected_years, 4),
+            "log_moneyness": round(math.log(max(r["strike"], 1e-8) / max(spot, 1e-8)), 6),
+            "iv": round(r["iv"], 6),
+            "iv_pct": round(r["iv"] * 100, 3),
+        }
+        for r in chosen if r["iv"] > 0
+    ]
+    return {"rows": rows, "selected_expiry": selected_expiry, "selected_years": round(selected_years, 4)}
 
 
 def pick_iv(surface: list[dict], target_strike: float, target_years: float) -> dict | None:

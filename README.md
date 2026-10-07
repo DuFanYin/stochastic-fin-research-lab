@@ -31,8 +31,8 @@
 在项目根目录执行：
 
 ```bash
-cd "/Users/hang/Downloads/Y3S2/stochastic fin/quant-lab"
-./run.sh
+./run.sh          # 只启动服务（使用已有的 engine/build）
+./run.sh build    # 先以 Release 重新构建 C++ 引擎，再启动服务
 ```
 
 访问地址：
@@ -44,15 +44,14 @@ cd "/Users/hang/Downloads/Y3S2/stochastic fin/quant-lab"
 ## 构建 C++ 引擎
 
 ```bash
-cd "/Users/hang/Downloads/Y3S2/stochastic fin/quant-lab"
-./build_cpp.sh
+./run.sh build
 ```
 
-Debug 构建：
+Debug 构建（直接调用 CMake）：
 
 ```bash
-cd "/Users/hang/Downloads/Y3S2/stochastic fin/quant-lab"
-./build_cpp.sh Debug
+cmake -S engine -B engine/build -DCMAKE_BUILD_TYPE=Debug
+cmake --build engine/build -j
 ```
 
 主要产物：

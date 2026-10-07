@@ -29,6 +29,7 @@ std::string run_implied_vol_json(const std::string& request_json, double t0_ms);
 std::string run_implied_vol_batch_json(const std::string& request_json, double t0_ms);
 std::string run_heston_calibrate_json(const std::string& request_json, double t0_ms);
 std::string run_heston_price_json(const std::string& request_json, double t0_ms);
+std::string run_screener_json(const std::string& request_json, double t0_ms);
 }  // namespace sf
 
 namespace {
@@ -153,6 +154,11 @@ int sf_run_heston_calibrate_json(const char* request_json, char* out_response_js
 int sf_run_heston_price_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
     if (!request_json) return 2;
     return copy_response_to_buffer(sf::run_heston_price_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
+}
+
+int sf_run_screener_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
+    if (!request_json) return 2;
+    return copy_response_to_buffer(sf::run_screener_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
 }
 
 void sf_set_num_threads(int n_threads) {
