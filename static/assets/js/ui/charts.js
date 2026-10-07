@@ -1062,3 +1062,35 @@ export function efficiencyFrontierChart(canvas, strategies, opts = {}) {
   ctx.textAlign = "left";
   ctx.fillText("Hedge Efficiency Frontier  (lower-left = better)", padL, padT - 8);
 }
+
+// ── Payoff at expiry (SVG) ────────────────────────────────────────────────────
+// points: [{x, y}] sorted by x. opts.marker: x value to mark (e.g. forward).
+export function payoffChart(points, opts = {}) {
+  if (!points?.length) return "";
+  const w = opts.w ?? 560;
+  const h = opts.h ?? 200;
+  const padL = 64, padR = 16, padT = 14, padB = 30;
+  const xs = points.map((p) => num(p.x));
+  const ys = points.map((p) => num(p.y));
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys, 0), maxY = Math.max(...ys, 0);
+  const dx = maxX - minX || 1;
+  const dy = maxY - minY || 1;
+  const px = (x) => padL + ((x - minX) / dx) * (w - padL - padR);
+  const py = (y) => h - padB - ((y - minY) / dy) * (h - padT - padB);
+  const line = points.map((p) => `${px(num(p.x))},${py(num(p.y))}`).join(" ");
+  const zeroY = py(0);
+  const marker = opts.marker != null && opts.marker >= minX && opts.marker <= maxX
+    ? `<line x1="${px(opts.marker)}" y1="${padT}" x2="${px(opts.marker)}" y2="${h - padB}" stroke="#6c8cff" stroke-dasharray="3,3" stroke-width="1"/>
+       <text x="${px(opts.marker) + 4}" y="${padT + 10}" font-size="10" fill="#8fa0c3">F</text>`
+    : "";
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" class="sparkline" preserveAspectRatio="none">
+    <line x1="${padL}" y1="${zeroY}" x2="${w - padR}" y2="${zeroY}" stroke="rgba(143,160,195,0.45)" stroke-width="1"/>
+    ${marker}
+    <polyline points="${line}" fill="none" stroke="#31b67a" stroke-width="1.8"/>
+    <text x="4" y="${py(maxY) + 4}" font-size="10" fill="#8fa0c3">${fmtTick(maxY)}</text>
+    <text x="4" y="${py(minY)}" font-size="10" fill="#8fa0c3">${fmtTick(minY)}</text>
+    <text x="${padL}" y="${h - 8}" font-size="10" fill="#8fa0c3">${fmtTick(minX)}</text>
+    <text x="${w - padR}" y="${h - 8}" font-size="10" fill="#8fa0c3" text-anchor="end">${fmtTick(maxX)}</text>
+  </svg>`;
+}

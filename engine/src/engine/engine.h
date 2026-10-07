@@ -49,6 +49,10 @@ struct LegSpec {
     std::string option_type = "call";  // "call" | "put"
     double strike   = 0.0;
     double quantity = 1.0;  // signed notional (positive=long, negative=short)
+    // Optional per-leg overrides; <= 0 means "use the strategy-level value".
+    double vol      = 0.0;
+    double maturity = 0.0;
+    double forward  = 0.0;  // price this leg off its own forward (Black-76 equivalent)
 };
 
 struct MultiLegParams {

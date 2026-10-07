@@ -22,6 +22,8 @@ import {
   runValidationForCompute,
   runValidationOnly,
   runMultiLeg,
+  runScreener,
+  loadScreenerSnapshots,
   loadStressPacks,
   initBurstSliders,
 } from "./page/runners.js";
@@ -34,6 +36,8 @@ initSwitchButtons();
 initModeParamSections();
 
 initModeSwitch(["measureModePQ", "measureModeRN"]);
+initModeSwitch(["screenerViewStrategies", "screenerViewChain"]);
+["scrSingle", "scrIc", "scrStraddle", "scrStrangle", "scrFwdVol"].forEach(initToggleButton);
 
 // Pricing single/batch toggle — also controls batch-only param visibility
 function applyPricingMode(isBatch) {
@@ -107,6 +111,7 @@ document.getElementById("btnFetchLive")?.addEventListener("click", () => {
 const RESULT_SECTIONS = [
   "resultCardPricing",
   "resultCardMultiLeg",
+  "resultCardScreener",
   "resultCardStress",
   "resultCardBenchmark",
   "resultCardValidation",
@@ -149,6 +154,13 @@ const MODE_RUN_MAP = {
   runBtnMultiLeg:      () => runWithOptionalValidation(runMultiLeg,      "resultCardMultiLeg"),
   runBtnStress:     () => runWithOptionalValidation(runStress,         "resultCardStress"),
   runBtnBenchmark:  () => runWithOptionalValidation(runBenchmark,      "resultCardBenchmark"),
+  // The screener runs on the Deribit chain, independent of the global inputs and
+  // the validation pre-check, so it skips both.
+  runBtnScreener: async () => {
+    markRunStart();
+    try { await runScreener(showOnlyResultSection); }
+    catch (err) { showErrorToast(err?.message ?? String(err), "Screener Failed"); }
+  },
   runBtnValidation: async () => {
     markRunStart();
     try {
@@ -166,7 +178,7 @@ document.getElementById("runBtnMain")?.addEventListener("click", () => {
 
 const RUN_MODE_BTN_IDS = [
   "runBtnPricing", "runBtnStress", "runBtnMultiLeg",
-  "runBtnBenchmark", "runBtnValidation",
+  "runBtnBenchmark", "runBtnValidation", "runBtnScreener",
 ];
 
 function setActiveModeBtn(id) {
@@ -185,7 +197,20 @@ RUN_MODE_BTN_IDS.forEach((id) => {
     const isBatch = document.getElementById("pricingModeBatch")?.classList.contains("active");
     const batchParams = document.getElementById("batchPricingParams");
     if (batchParams) batchParams.style.display = (id === "runBtnPricing" && isBatch) ? "contents" : "none";
+    if (id === "runBtnScreener") loadScreenerSnapshots().catch(() => {});
   });
+});
+
+/* ─── Screener: snapshot list follows the selected underlying ────────────── */
+
+document.getElementById("btnScreenerSnapshots")?.addEventListener("click", () => {
+  loadScreenerSnapshots().catch((err) => showErrorToast(err?.message ?? String(err), "Snapshots"));
+});
+document.getElementById("scrCurrency")?.addEventListener("click", (e) => {
+  if (!e.target.closest(".select-btn")) return;
+  const sel = document.getElementById("scrSnapshot");
+  if (sel) sel.value = "";
+  loadScreenerSnapshots().catch(() => {});
 });
 
 /* ─── Param flash ────────────────────────────────────────────────────────── */

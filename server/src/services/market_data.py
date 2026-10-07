@@ -329,6 +329,27 @@ async def fetch_option_chain(currency: str = "BTC", *, allow_stale: bool = True)
         raise ChainUnavailable(f"{cur} option chain unavailable and no snapshot/fixture") from exc
 
 
+def surface_rows_from_chain(chain: list[dict], spot: float, strikes_per_expiry: int = 7) -> list[dict]:
+    """Calls with a valid IV, the `strikes_per_expiry` strikes nearest spot per expiry, in expiry order."""
+    calls_by_expiry: dict[str, list[dict]] = {}
+    for row in chain:
+        if row["option_type"] == "call" and row["iv"] > 0:
+            calls_by_expiry.setdefault(row["expiry"], []).append(row)
+    surface = []
+    for rows in calls_by_expiry.values():          # chain is already in expiry order
+        chosen = sorted(rows, key=lambda r: abs(r["strike"] - spot))[:strikes_per_expiry]
+        for row in chosen:
+            surface.append({
+                "expiry":     row["expiry"],
+                "instrument": row["symbol"],
+                "strike":     row["strike"],
+                "years":      round(row["years"], 4),
+                "iv":         round(row["iv"], 4),
+                "iv_pct":     round(row["iv"] * 100, 2),
+            })
+    return surface
+
+
 async def fetch_iv_surface(spot: float, strikes_per_expiry: int = 7,
                            currency: str = "BTC") -> dict[str, Any]:
     """
@@ -353,23 +374,7 @@ async def fetch_iv_surface(spot: float, strikes_per_expiry: int = 7,
         log.warning("Options chain failed for IV surface (%s)", exc)
         return {"surface": [], "raw_instruments_count": 0}
 
-    calls_by_expiry: dict[str, list[dict]] = {}
-    for row in data["chain"]:
-        if row["option_type"] == "call" and row["iv"] > 0:
-            calls_by_expiry.setdefault(row["expiry"], []).append(row)
-
-    surface = []
-    for rows in calls_by_expiry.values():          # chain is already in expiry order
-        chosen = sorted(rows, key=lambda r: abs(r["strike"] - spot))[:strikes_per_expiry]
-        for row in chosen:
-            surface.append({
-                "expiry":     row["expiry"],
-                "instrument": row["symbol"],
-                "strike":     row["strike"],
-                "years":      round(row["years"], 4),
-                "iv":         round(row["iv"], 4),
-                "iv_pct":     round(row["iv"] * 100, 2),
-            })
+    surface = surface_rows_from_chain(data["chain"], spot, strikes_per_expiry)
     return {"surface": surface, "raw_instruments_count": data["n_instruments"]}
 
 

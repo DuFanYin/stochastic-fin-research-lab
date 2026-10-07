@@ -188,6 +188,9 @@ struct LegResult {
     double      mc_price     = 0.0;
     double      delta_bs     = 0.0;
     double      vega_bs      = 0.0;
+    double      vol          = 0.0;   // effective per-leg inputs
+    double      maturity     = 0.0;
+    double      forward      = 0.0;   // 0 when the leg is priced off spot
 };
 
 struct MultiLegResult {

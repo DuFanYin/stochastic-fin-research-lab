@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -222,6 +224,18 @@ class LegSpecRequest(BaseModel):
     option_type: str = "call"    # "call" | "put"
     strike: float = Field(..., gt=0)
     quantity: float = Field(1.0, ge=-100.0, le=100.0)
+    # Optional per-leg overrides (e.g. legs handed over from the screener)
+    vol: float | None = Field(None, gt=0, le=5.0)
+    maturity: float | None = Field(None, gt=0, le=100.0)
+    forward: float | None = Field(None, gt=0)
+
+    def engine_payload(self) -> dict:
+        leg = {"option_type": self.option_type, "strike": self.strike, "quantity": self.quantity}
+        for key in ("vol", "maturity", "forward"):
+            value = getattr(self, key)
+            if value is not None:
+                leg[key] = value
+        return leg
 
 
 class MultiLegRequest(BaseModel):
@@ -250,4 +264,79 @@ class StressLibraryRequest(BaseModel):
     stress_pack: str = "core4"
     stress_severity: str = "moderate"
     include_hedge_compare: bool = True
+    # Portfolio mode: when legs are given, every scenario reprices the whole
+    # multi-leg position instead of a single option at `strike`.
+    legs: list[LegSpecRequest] | None = Field(None, min_length=1, max_length=10)
+
+
+# ── Screener ──────────────────────────────────────────────────────────────────
+
+Range = tuple[float | None, float | None] | None
+
+
+class ScreenerStrategies(BaseModel):
+    single_calls: bool = False
+    iron_condors: bool = False
+    straddles: bool = False
+    strangles: bool = False
+    forward_vols: bool = False
+
+
+class ScreenerOptionFilter(BaseModel):
+    min_volume: float | None = Field(None, ge=0)
+    min_oi: float | None = Field(None, ge=0)
+    min_price: float | None = Field(None, ge=0)
+    expiry: str | None = None
+    days_to_expiry_range: Range = None
+    volume_ratio_range: Range = None
+    max_bid_ask_spread: float | None = Field(None, ge=0)
+    max_bid_ask_spread_pct: float | None = Field(None, ge=0)
+    moneyness_range: Range = None
+    require_two_sided: bool = True
+
+
+class ScreenerStrategyFilter(BaseModel):
+    direction: Literal["LONG", "SHORT"] = "LONG"
+    debit_range: Range = None
+    credit_range: Range = None
+    potential_gain_range: Range = None
+    potential_loss_range: Range = None
+    rr_range: Range = None
+    net_delta_range: Range = None
+    net_theta_range: Range = None
+    net_vega_range: Range = None
+    iv_range: Range = None
+    forward_vol_range: Range = None
+    edge_range: Range = None
+
+
+class ScreenerHeston(BaseModel):
+    v0: float = Field(..., gt=0)
+    kappa: float = Field(..., gt=0)
+    theta: float = Field(..., gt=0)
+    xi: float = Field(..., gt=0)
+    rho: float = Field(..., ge=-1.0, le=1.0)
+
+
+class ScreenerRank(BaseModel):
+    key: Literal["rr", "gain", "loss", "cost", "credit", "edge", "forward_vol"] = "rr"
+    descending: bool | None = None          # None: natural order for the key
+    top_n: int = Field(20, ge=1, le=500)
+
+
+class ScreenerRequest(BaseModel):
+    currency: Literal["BTC", "ETH"] = "BTC"
+    snapshot_id: str | None = None          # cached snapshot instead of the live chain
+    strategies: ScreenerStrategies
+    option_filter: ScreenerOptionFilter = ScreenerOptionFilter()
+    strategy_filter: ScreenerStrategyFilter = ScreenerStrategyFilter()
+    price_mode: Literal["executable", "mid"] = "executable"
+    # Reference volatility for model value / edge. "dvol" uses Deribit's DVOL
+    # index as a flat vol; "surface" uses the sparse ATM surface built from the
+    # same chain; "heston" needs explicit parameters.
+    model_vol: Literal["mark", "dvol", "flat", "surface", "heston", "none"] = "mark"
+    model_vol_flat: float | None = Field(None, gt=0, le=5.0)
+    heston: ScreenerHeston | None = None
+    rate: float | None = Field(None, ge=-1.0, le=1.0)   # None: the chain's own (Deribit) rate
+    rank: ScreenerRank = ScreenerRank()
 

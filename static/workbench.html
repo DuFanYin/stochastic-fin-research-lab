@@ -178,6 +178,10 @@
                 <label>Include Hedge</label>
                 <button type="button" id="stressIncludeHedge" class="switch-btn" data-value="true">On</button>
               </div>
+              <div class="field param-full">
+                <label title="Leave empty to stress the single option above. Same format as Multi-Leg; filled by the Screener's → Risk.">Portfolio (optional, JSON)</label>
+                <textarea id="stressLegs" rows="3" placeholder="empty: single option at Strike" style="font-family:monospace;font-size:0.85em;width:100%;box-sizing:border-box;"></textarea>
+              </div>
             </div>
 
             <div class="mode-params" data-modes="runBtnPricing,runBtnIv">
@@ -216,9 +220,115 @@
             <div class="mode-params" data-modes="runBtnMultiLeg">
               <div class="param-group-label">Multi-Leg Strategy</div>
               <div class="field param-full">
-                <label>Legs (JSON array)</label>
+                <label title="Either an array of legs, or {&quot;spot&quot;, &quot;rate&quot;, &quot;legs&quot;} to override the global spot / rate. Legs may carry their own vol, maturity and forward.">Legs (JSON)</label>
                 <textarea id="multiLegLegs" rows="4" style="font-family:monospace;font-size:0.85em;width:100%;box-sizing:border-box;">[{"option_type":"call","strike":100,"quantity":1},{"option_type":"put","strike":100,"quantity":1}]</textarea>
               </div>
+            </div>
+
+
+            <div class="mode-params" data-modes="runBtnScreener">
+              <div class="param-group-label param-group-label--with-action">
+                <span>Screener Data</span>
+                <button id="btnScreenerSnapshots" type="button" class="mode-switch param-group-btn" title="Reload the list of cached chain snapshots">Snapshots</button>
+              </div>
+              <div class="field param-full">
+                <label>Underlying</label>
+                <div id="scrCurrency" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="BTC">BTC</button>
+                  <button type="button" class="select-btn" data-value="ETH">ETH</button>
+                </div>
+              </div>
+              <div class="field param-full">
+                <label title="Live Deribit chain, or a cached snapshot">Chain</label>
+                <select id="scrSnapshot" class="iv-expiry-select"><option value="">Live (Deribit)</option></select>
+              </div>
+
+              <div class="param-group-label">Strategies</div>
+              <div class="field param-full">
+                <div class="button-row scr-toggle-row">
+                  <button type="button" id="scrSingle" class="mode-switch" data-value="single_calls" title="Single OTM call">Call</button>
+                  <button type="button" id="scrIc" class="mode-switch active" data-value="iron_condors" title="Iron condor">IC</button>
+                  <button type="button" id="scrStraddle" class="mode-switch" data-value="straddles">Straddle</button>
+                  <button type="button" id="scrStrangle" class="mode-switch active" data-value="strangles">Strangle</button>
+                  <button type="button" id="scrFwdVol" class="mode-switch" data-value="forward_vols" title="Same-strike calendar between two expiries, ranked by forward vol">Calendar</button>
+                </div>
+              </div>
+              <div class="field param-full">
+                <label title="LONG: buy premium (credit condor for IC, sell-near/buy-far for calendars). SHORT: the opposite.">Direction</label>
+                <div id="scrDirection" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="LONG">Long</button>
+                  <button type="button" class="select-btn" data-value="SHORT">Short</button>
+                </div>
+              </div>
+
+              <div class="param-group-label">Option Filter</div>
+              <div class="field"><label title="Open interest, in coins">Min OI</label><input id="scrMinOi" type="number" value="1" step="any"></div>
+              <div class="field"><label title="24h volume, in coins">Min Volume</label><input id="scrMinVolume" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label title="Mid price, USD per coin">Min Price</label><input id="scrMinPrice" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label title="(ask - bid) / mid">Max Spread %</label><input id="scrMaxSpreadPct" type="number" value="0.2" step="0.01"></div>
+              <div class="field"><label>Days ≥</label><input id="scrDaysLo" type="number" value="1" step="any"></div>
+              <div class="field"><label>Days ≤</label><input id="scrDaysHi" type="number" value="60" step="any"></div>
+              <div class="field"><label title="Strike / forward of the option's expiry">K/F ≥</label><input id="scrMoneyLo" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label title="Strike / forward of the option's expiry">K/F ≤</label><input id="scrMoneyHi" type="number" step="any" placeholder="—"></div>
+              <div class="field">
+                <label title="Drop options without both a bid and an ask">Two-sided</label>
+                <button type="button" id="scrTwoSided" class="switch-btn" data-value="true">On</button>
+              </div>
+
+              <div class="param-group-label">Strategy Filter</div>
+              <div class="field"><label>Debit ≥</label><input id="scrDebitLo" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Debit ≤</label><input id="scrDebitHi" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Credit ≥</label><input id="scrCreditLo" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Credit ≤</label><input id="scrCreditHi" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Max Loss ≥</label><input id="scrLossLo" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Max Loss ≤</label><input id="scrLossHi" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>RR ≥</label><input id="scrRrLo" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>RR ≤</label><input id="scrRrHi" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Net Δ ≥</label><input id="scrDeltaLo" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Net Δ ≤</label><input id="scrDeltaHi" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Avg IV ≥</label><input id="scrIvLo" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Avg IV ≤</label><input id="scrIvHi" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label title="model value - cost">Edge ≥</label><input id="scrEdgeLo" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label title="model value - cost">Edge ≤</label><input id="scrEdgeHi" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Fwd Vol ≥</label><input id="scrFwdVolRLo" type="number" step="any" placeholder="—"></div>
+              <div class="field"><label>Fwd Vol ≤</label><input id="scrFwdVolRHi" type="number" step="any" placeholder="—"></div>
+
+              <div class="param-group-label">Model / Ranking</div>
+              <div class="field param-full">
+                <label title="Reference vol for model value and edge = model - cost">Model Vol</label>
+                <div id="scrModelVol" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="mark">Mark</button>
+                  <button type="button" class="select-btn" data-value="dvol">DVOL</button>
+                  <button type="button" class="select-btn" data-value="surface">Surface</button>
+                  <button type="button" class="select-btn" data-value="heston">Heston</button>
+                  <button type="button" class="select-btn" data-value="none">None</button>
+                </div>
+              </div>
+              <div class="field"><label>Heston v0</label><input id="scrHestonV0" type="number" value="0.25" step="0.01"></div>
+              <div class="field"><label>kappa</label><input id="scrHestonKappa" type="number" value="2.0" step="0.1"></div>
+              <div class="field"><label>theta</label><input id="scrHestonTheta" type="number" value="0.25" step="0.01"></div>
+              <div class="field"><label>xi</label><input id="scrHestonXi" type="number" value="0.8" step="0.05"></div>
+              <div class="field param-full"><label>rho</label><input id="scrHestonRho" type="number" value="-0.3" step="0.05"></div>
+              <div class="field param-full">
+                <label title="Executable: buy at ask, sell at bid">Prices</label>
+                <div id="scrPriceMode" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="executable">Executable</button>
+                  <button type="button" class="select-btn" data-value="mid">Mid</button>
+                </div>
+              </div>
+              <div class="field param-full">
+                <label>Rank By</label>
+                <div id="scrRankKey" class="select-buttons">
+                  <button type="button" class="select-btn active" data-value="rr">RR</button>
+                  <button type="button" class="select-btn" data-value="edge">Edge</button>
+                  <button type="button" class="select-btn" data-value="cost">Cost</button>
+                  <button type="button" class="select-btn" data-value="credit">Credit</button>
+                  <button type="button" class="select-btn" data-value="gain">Gain</button>
+                  <button type="button" class="select-btn" data-value="loss">Loss</button>
+                  <button type="button" class="select-btn" data-value="forward_vol">Fwd Vol</button>
+                </div>
+              </div>
+              <div class="field"><label>Top N</label><input id="scrTopN" type="number" value="20" min="1" max="500"></div>
             </div>
 
             <div class="mode-params" data-modes="runBtnBenchmark">
@@ -273,6 +383,7 @@
               <div class="button-row">
                 <button id="runBtnBenchmark" class="mode-switch" type="button">Numerics</button>
                 <button id="runBtnValidation" class="mode-switch" type="button">Validation Only</button>
+                <button id="runBtnScreener" class="mode-switch" type="button">Screener</button>
               </div>
             </div>
             <div class="compute-mode-section">
@@ -288,6 +399,13 @@
                 <span class="muted compute-mode-label">Pricing</span>
                 <button id="pricingModeSingle" class="mode-switch active">Single</button>
                 <button id="pricingModeBatch" class="mode-switch">Batch</button>
+              </div>
+            </div>
+            <div class="compute-mode-section">
+              <div class="button-row">
+                <span class="muted compute-mode-label">Screener</span>
+                <button id="screenerViewStrategies" class="mode-switch active">Strategies</button>
+                <button id="screenerViewChain" class="mode-switch">Chain</button>
               </div>
             </div>
             <div class="compute-mode-section">
@@ -357,6 +475,12 @@
           <section id="resultCardMultiLeg" class="result-section is-hidden">
             <div class="result-section-label">Multi-Leg Strategy</div>
             <div id="multiLegOut"></div>
+          </section>
+
+          <section id="resultCardScreener" class="result-section is-hidden">
+            <div class="result-section-label">Screener<span id="diagScreener" class="diag-badge"></span></div>
+            <div id="screenerOut"></div>
+            <div id="screenerDetailOut"></div>
           </section>
 
           <section id="resultCardStress" class="result-section is-hidden">

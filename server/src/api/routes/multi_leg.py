@@ -10,10 +10,7 @@ router = APIRouter(tags=["pricing"])
 
 @router.post("/tool/pricing/multi-leg")
 async def run_multi_leg(req: MultiLegRequest) -> dict:
-    legs_payload = [
-        {"option_type": leg.option_type, "strike": leg.strike, "quantity": leg.quantity}
-        for leg in req.legs
-    ]
+    legs_payload = [leg.engine_payload() for leg in req.legs]
     result = multi_leg(
         spot=req.spot,
         rate=req.rate,

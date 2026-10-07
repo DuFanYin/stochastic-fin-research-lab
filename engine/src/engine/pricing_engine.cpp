@@ -188,6 +188,23 @@ PricingBatchResult run_pricing_batch_grid(const BatchGridParams& p, double runti
     return assemble_batch(spots, strikes, vols, out_mc, out_bs, out_bin, runtime_ms);
 }
 
+namespace {
+
+// Legs ordered short call, long call, short put, long put (or all signs flipped),
+// one expiry, call strikes above put strikes — the shape the screener emits.
+bool is_iron_condor(const std::vector<LegSpec>& legs) {
+    const auto& sc = legs[0]; const auto& lc = legs[1];
+    const auto& sp = legs[2]; const auto& lp = legs[3];
+    if (sc.option_type != "call" || lc.option_type != "call"
+        || sp.option_type != "put" || lp.option_type != "put") return false;
+    const double sign = sc.quantity;
+    if (sign == 0.0 || lc.quantity * sign >= 0 || sp.quantity * sign <= 0 || lp.quantity * sign >= 0) return false;
+    if (sc.maturity != lc.maturity || sc.maturity != sp.maturity || sc.maturity != lp.maturity) return false;
+    return lp.strike < sp.strike && sp.strike < sc.strike && sc.strike < lc.strike;
+}
+
+}  // namespace
+
 MultiLegResult run_multi_leg(const MultiLegParams& p) {
     const double r_eff = p.rate - p.dividend_yield;
     const int steps = std::max(10, static_cast<int>(p.maturity * 250.0));
@@ -195,19 +212,27 @@ MultiLegResult run_multi_leg(const MultiLegParams& p) {
     MultiLegResult r;
     for (const auto& leg : p.legs) {
         const bool is_call = (leg.option_type != "put");
+        const double vol = leg.vol      > 0.0 ? leg.vol      : p.vol;
+        const double t   = leg.maturity > 0.0 ? leg.maturity : p.maturity;
+        // A leg with its own forward is priced on the spot that carries to that
+        // forward at r_eff, i.e. Black-76 on the forward.
+        const double s   = leg.forward  > 0.0 ? leg.forward * std::exp(-r_eff * t) : p.spot;
         LegResult lr;
         lr.option_type = leg.option_type;
         lr.strike      = leg.strike;
         lr.quantity    = leg.quantity;
-        lr.bs_price    = bs_closed_form_price(p.spot, leg.strike, r_eff, p.vol, p.maturity, is_call);
-        lr.mc_price    = mc_price_full(p.spot, leg.strike, r_eff, p.vol, p.maturity, p.n_paths, is_call);
+        lr.vol         = vol;
+        lr.maturity    = t;
+        lr.forward     = leg.forward > 0.0 ? leg.forward : 0.0;
+        lr.bs_price    = bs_closed_form_price(s, leg.strike, r_eff, vol, t, is_call);
+        lr.mc_price    = mc_price_full(s, leg.strike, r_eff, vol, t, p.n_paths, is_call);
 
         double delta = 0.0, gamma = 0.0, theta = 0.0, vega = 0.0, rho = 0.0;
-        pricing_greeks(p.spot, leg.strike, r_eff, p.vol, p.maturity, p.dividend_yield,
+        pricing_greeks(s, leg.strike, r_eff, vol, t, p.dividend_yield,
                        &delta, &gamma, &theta, &vega, &rho);
         if (!is_call) {
             // put delta = call delta - exp(-q*T)
-            delta -= std::exp(-p.dividend_yield * p.maturity);
+            delta -= std::exp(-p.dividend_yield * t);
         }
         lr.delta_bs = delta;
         lr.vega_bs  = vega;
@@ -220,7 +245,15 @@ MultiLegResult run_multi_leg(const MultiLegParams& p) {
     }
 
     const int n = static_cast<int>(p.legs.size());
-    if (n == 2) {
+    const auto leg_t = [&](const LegSpec& l) { return l.maturity > 0.0 ? l.maturity : p.maturity; };
+    if (n == 2 && p.legs[0].option_type == p.legs[1].option_type
+        && std::abs(p.legs[0].strike - p.legs[1].strike) < 1e-6
+        && std::abs(leg_t(p.legs[0]) - leg_t(p.legs[1])) > 1e-9
+        && p.legs[0].quantity * p.legs[1].quantity < 0) {
+        r.strategy_hint = "calendar";
+    } else if (n == 4 && is_iron_condor(p.legs)) {
+        r.strategy_hint = p.legs[0].quantity < 0 ? "iron_condor" : "reverse_iron_condor";
+    } else if (n == 2) {
         const bool l0_call = (p.legs[0].option_type != "put");
         const bool l1_call = (p.legs[1].option_type != "put");
         const double q0 = p.legs[0].quantity, q1 = p.legs[1].quantity;

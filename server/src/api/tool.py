@@ -11,6 +11,7 @@ from src.api.routes.greeks import router as greeks_router
 from src.api.routes.multi_leg import router as multi_leg_router
 from src.api.routes.calibration import router as calibration_router
 from src.api.routes.stress import router as stress_router
+from src.api.routes.screener import router as screener_router
 
 router = APIRouter(tags=["tools"])
 router.include_router(pricing_router)
@@ -22,3 +23,4 @@ router.include_router(greeks_router)
 router.include_router(multi_leg_router)
 router.include_router(calibration_router)
 router.include_router(stress_router)
+router.include_router(screener_router)

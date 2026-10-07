@@ -31,6 +31,9 @@ import {
   renderAllGreeks,
   renderMultiLeg,
   renderCalibration,
+  renderScreener,
+  renderScreenerDetail,
+  renderChain,
 } from "../ui/core.js";
 
 const API_BASE = `${window.location.origin}/api`;
@@ -575,6 +578,36 @@ export async function runStress(showResultCard) {
     vol_mismatch_mult:    Number(document.getElementById("hedgeVolMismatchMult").value),
   };
 
+  let position;
+  try {
+    position = parsePosition(document.getElementById("stressLegs")?.value);
+  } catch (err) {
+    showError("stressOut", err);
+    setHtml("hedgeOut", "");
+    return;
+  }
+  if (position) {
+    // Portfolio mode: the hedging engine covers single options only.
+    try {
+      const data = await postJson("/tool/stress/run", {
+        spot:                 position.spot ?? base.spot,
+        strike:               base.strike,
+        rate:                 position.rate ?? base.rate,
+        vol:                  base.vol,
+        maturity:             base.maturity,
+        n_paths:              base.n_paths,
+        dividend_yield:       base.dividend_yield,
+        stress_pack:          getSelectButtonValue("stressPack"),
+        stress_severity:      getSelectButtonValue("stressSeverity"),
+        include_hedge_compare: false,
+        legs:                 position.legs,
+      });
+      renderStress("stressOut", data);
+    } catch (err) { showError("stressOut", err); }
+    setHtml("hedgeOut", resultWrap(`<div class="muted-sm">Portfolio${position.label ? ` (${position.label})` : ""}: ${position.legs.length} legs. Delta-hedge comparison covers single options only and is skipped; clear the Portfolio box to hedge the single option.</div>`));
+    return;
+  }
+
   const [stressResult, hedgeResult] = await Promise.allSettled([
     postJson("/tool/stress/run", {
       spot:                 base.spot,
@@ -752,15 +785,12 @@ export async function runMultiLeg(showResultCard) {
   setRunning("multiLegOut", "multi-leg");
   try {
     const base = basePayload();
-    let legs;
-    try {
-      legs = JSON.parse(document.getElementById("multiLegLegs")?.value || "[]");
-    } catch {
-      legs = [{ option_type: "call", strike: base.strike, quantity: 1 }];
-    }
+    const position = parsePosition(document.getElementById("multiLegLegs")?.value)
+      ?? { legs: [{ option_type: "call", strike: base.strike, quantity: 1 }] };
+    const legs = position.legs;
     const data = await postJson("/tool/pricing/multi-leg", {
-      spot:           base.spot,
-      rate:           base.rate,
+      spot:           position.spot ?? base.spot,
+      rate:           position.rate ?? base.rate,
       vol:            base.vol,
       maturity:       base.maturity,
       dividend_yield: base.dividend_yield,
@@ -878,4 +908,156 @@ export function initBurstSliders() {
   if (upper && upperVal) {
     upper.addEventListener("input", () => { upperVal.textContent = `${upper.value}%`; });
   }
+}
+
+
+/* ─── Positions shared by Multi-Leg / Risk ────────────────────────────────── */
+
+/**
+ * Parse a position textarea: either a legs array or {spot?, rate?, label?, legs}.
+ * Returns null when empty; throws on malformed JSON so the user sees why.
+ */
+function parsePosition(text) {
+  const raw = (text ?? "").trim();
+  if (!raw) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Legs JSON is invalid: ${err.message}`);
+  }
+  const position = Array.isArray(parsed) ? { legs: parsed } : parsed;
+  if (!Array.isArray(position?.legs) || !position.legs.length) {
+    throw new Error("Legs JSON must be a non-empty array, or an object with a non-empty \"legs\" array");
+  }
+  return position;
+}
+
+/** Screener strategy → multi-leg position (per-leg vol / maturity / forward). */
+function strategyToPosition(strategy, summary) {
+  const mult = Number(summary?.multiplier ?? 1);
+  return {
+    label: strategy.label,
+    spot: summary?.spot,
+    rate: summary?.rate,
+    legs: (strategy.legs || []).map((l) => {
+      const leg = { option_type: l.option_type, strike: l.strike, quantity: l.qty * mult,
+                    maturity: Number(l.years.toFixed(8)), forward: l.forward };
+      if (l.iv > 0) leg.vol = l.iv;
+      return leg;
+    }),
+  };
+}
+
+function handOff(textareaId, modeBtnId, strategy, summary) {
+  const el = document.getElementById(textareaId);
+  if (el) el.value = JSON.stringify(strategyToPosition(strategy, summary), null, 1);
+  document.getElementById(modeBtnId)?.click();      // switch mode + its param groups
+  document.getElementById("runBtnMain")?.click();   // and run it
+}
+
+const screenerHandlers = {
+  onSelect:   (strategy, summary) => renderScreenerDetail("screenerDetailOut", strategy, summary, screenerHandlers),
+  onMultiLeg: (strategy, summary) => handOff("multiLegLegs", "runBtnMultiLeg", strategy, summary),
+  onRisk:     (strategy, summary) => handOff("stressLegs", "runBtnStress", strategy, summary),
+};
+
+/* ─── Screener ────────────────────────────────────────────────────────────── */
+
+function numOrNull(id) {
+  const raw = document.getElementById(id)?.value;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function rangeOrNull(prefix) {
+  const lo = numOrNull(`${prefix}Lo`), hi = numOrNull(`${prefix}Hi`);
+  return lo === null && hi === null ? null : [lo, hi];
+}
+
+function screenerPayload() {
+  const strategies = {};
+  ["scrSingle", "scrIc", "scrStraddle", "scrStrangle", "scrFwdVol"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) strategies[el.dataset.value] = el.classList.contains("active");
+  });
+  const modelVol = getSelectButtonValue("scrModelVol") || "mark";
+  const payload = {
+    currency: getSelectButtonValue("scrCurrency") || "BTC",
+    snapshot_id: document.getElementById("scrSnapshot")?.value || null,
+    strategies,
+    option_filter: {
+      min_oi: numOrNull("scrMinOi"),
+      min_volume: numOrNull("scrMinVolume"),
+      min_price: numOrNull("scrMinPrice"),
+      max_bid_ask_spread_pct: numOrNull("scrMaxSpreadPct"),
+      days_to_expiry_range: rangeOrNull("scrDays"),
+      moneyness_range: rangeOrNull("scrMoney"),
+      require_two_sided: getSwitchValue("scrTwoSided"),
+    },
+    strategy_filter: {
+      direction: getSelectButtonValue("scrDirection") || "LONG",
+      debit_range: rangeOrNull("scrDebit"),
+      credit_range: rangeOrNull("scrCredit"),
+      potential_loss_range: rangeOrNull("scrLoss"),
+      rr_range: rangeOrNull("scrRr"),
+      net_delta_range: rangeOrNull("scrDelta"),
+      iv_range: rangeOrNull("scrIv"),
+      edge_range: rangeOrNull("scrEdge"),
+      forward_vol_range: rangeOrNull("scrFwdVolR"),
+    },
+    price_mode: getSelectButtonValue("scrPriceMode") || "executable",
+    model_vol: modelVol,
+    rank: { key: getSelectButtonValue("scrRankKey") || "rr", top_n: numOrNull("scrTopN") ?? 20 },
+  };
+  if (modelVol === "heston") {
+    payload.heston = {
+      v0: numOrNull("scrHestonV0"), kappa: numOrNull("scrHestonKappa"), theta: numOrNull("scrHestonTheta"),
+      xi: numOrNull("scrHestonXi"), rho: numOrNull("scrHestonRho"),
+    };
+  }
+  return payload;
+}
+
+export async function runScreener(showResultCard) {
+  showResultCard("resultCardScreener");
+  setHtml("screenerDetailOut", "");
+  if (activeModeSwitch(["screenerViewStrategies", "screenerViewChain"]) === "screenerViewChain") {
+    return runScreenerChain();
+  }
+  setRunning("screenerOut", "screener");
+  try {
+    const data = await postJson("/tool/screener/run", screenerPayload());
+    renderScreener("screenerOut", data, screenerHandlers);
+    const top = data.result_details?.strategies?.[0];
+    if (top) screenerHandlers.onSelect(top, data.result_summary);
+    loadScreenerSnapshots().catch(() => {});        // a live run may have written a new snapshot
+  } catch (err) { showError("screenerOut", err); }
+}
+
+async function runScreenerChain() {
+  setRunning("screenerOut", "option chain");
+  try {
+    const params = new URLSearchParams({ currency: getSelectButtonValue("scrCurrency") || "BTC" });
+    const maxDays = numOrNull("scrDaysHi");
+    if (maxDays !== null && maxDays > 0) params.set("max_days", String(maxDays));
+    const snap = document.getElementById("scrSnapshot")?.value;
+    if (snap) params.set("snapshot_id", snap);
+    renderChain("screenerOut", await getJson(`/tool/screener/chain?${params}`));
+  } catch (err) { showError("screenerOut", err); }
+}
+
+export async function loadScreenerSnapshots() {
+  const sel = document.getElementById("scrSnapshot");
+  if (!sel) return;
+  const currency = getSelectButtonValue("scrCurrency") || "BTC";
+  const data = await getJson(`/tool/screener/snapshots?currency=${currency}`);
+  const current = sel.value;
+  const options = (data.snapshots || []).map((sn) => {
+    const m = /_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(sn.snapshot_id);
+    const label = m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]} UTC` : sn.snapshot_id;
+    return `<option value="${sn.snapshot_id}"${sn.snapshot_id === current ? " selected" : ""}>Snapshot ${label}</option>`;
+  });
+  sel.innerHTML = `<option value="">Live (Deribit)</option>${options.join("")}`;
 }

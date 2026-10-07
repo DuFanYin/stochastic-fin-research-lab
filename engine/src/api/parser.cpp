@@ -546,6 +546,9 @@ std::string run_multi_leg_json(const std::string& src, double t0_ms) {
             ls.option_type = jv<std::string>(leg, "option_type", "call");
             ls.strike      = jv<double>(leg, "strike", p.spot);
             ls.quantity    = jv<double>(leg, "quantity", 1.0);
+            ls.vol         = jv<double>(leg, "vol", 0.0);
+            ls.maturity    = jv<double>(leg, "maturity", 0.0);
+            ls.forward     = jv<double>(leg, "forward", 0.0);
             p.legs.push_back(ls);
         }
     }
@@ -557,6 +560,7 @@ std::string run_multi_leg_json(const std::string& src, double t0_ms) {
             {"option_type", lr.option_type}, {"strike", lr.strike}, {"quantity", lr.quantity},
             {"bs_price", lr.bs_price}, {"mc_price", lr.mc_price},
             {"delta_bs", lr.delta_bs}, {"vega_bs", lr.vega_bs},
+            {"vol", lr.vol}, {"maturity", lr.maturity}, {"forward", lr.forward},
         });
     }
     json jj = base_envelope(ctx->trace_id);

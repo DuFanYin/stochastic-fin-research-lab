@@ -74,6 +74,13 @@ def _run_pricing(payload: dict[str, Any]) -> dict[str, Any]:
     return r.get("result_summary", {}) if r.get("status") != "error" else {}
 
 
+def _run_multi_leg(payload: dict[str, Any]) -> dict[str, Any]:
+    r = run_engine_task("multi_leg", payload)
+    if r.get("status") == "error":
+        raise ValueError(f"multi-leg pricing failed: {r.get('error', {}).get('message', 'unknown')}")
+    return r.get("result_summary", {})
+
+
 def _run_hedging(payload: dict[str, Any]) -> dict[str, Any]:
     r = run_engine_task("hedging", payload)
     if r.get("status") == "error":
@@ -108,43 +115,57 @@ def run_stress_library(
     stress_pack: str,
     stress_severity: str,
     include_hedge_compare: bool,
+    legs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """
+    Reprice under each scenario of a stress pack.
+
+    Single-option mode (legs is None): the option at `strike`, with MC / BS /
+    binomial, plus an optional delta-hedge comparison per scenario.
+
+    Portfolio mode (legs given, multi-leg contract): the whole position is
+    repriced via the multi-leg engine. The spot shock also scales each leg's
+    `forward`, the vol shock scales each leg's own `vol`. The hedging engine
+    covers single options only, so the hedge comparison is skipped and there is
+    no binomial column.
+    """
     scale = _SEVERITY_SCALE.get(stress_severity, 1.0)
     scenarios = _pick_pack(stress_pack, scale)
+    portfolio = bool(legs)
+    if portfolio:
+        include_hedge_compare = False
 
-    base_pricing_payload = {
-        "spot": spot,
-        "strike": strike,
-        "rate": rate,
-        "vol": vol,
-        "maturity": maturity,
-        "n_paths": n_paths,
-        "dividend_yield": dividend_yield,
-    }
-    base = _run_pricing(base_pricing_payload)
-    base_mc = float(base.get("mc", 0.0))
-    base_bs = float(base.get("bs", 0.0))
-    base_bin = float(base.get("binomial", 0.0))
+    def price(s: float, v: float, r: float, spot_mult: float = 1.0, vol_mult: float = 1.0) -> dict[str, Any]:
+        if not portfolio:
+            p = _run_pricing({"spot": s, "strike": strike, "rate": r, "vol": v, "maturity": maturity,
+                              "n_paths": n_paths, "dividend_yield": dividend_yield})
+            return {"mc": float(p.get("mc", 0.0)), "bs": float(p.get("bs", 0.0)),
+                    "binomial": float(p.get("binomial", 0.0))}
+        shocked_legs = []
+        for leg in legs or []:
+            leg = dict(leg)
+            if leg.get("forward"):
+                leg["forward"] = leg["forward"] * spot_mult
+            if leg.get("vol"):
+                leg["vol"] = max(1e-8, leg["vol"] * vol_mult)
+            shocked_legs.append(leg)
+        p = _run_multi_leg({"spot": s, "rate": r, "vol": v, "maturity": maturity,
+                            "dividend_yield": dividend_yield, "n_paths": n_paths, "legs": shocked_legs})
+        return {"mc": float(p.get("net_mc_price", 0.0)), "bs": float(p.get("net_bs_price", 0.0)),
+                "binomial": None}
+
+    base = price(spot, vol, rate)
+    base_mc = base["mc"]
+    base_bs = base["bs"]
+    base_bin = base["binomial"]
 
     rows: list[dict[str, Any]] = []
     for sc in scenarios:
         shocked_spot = max(1e-8, spot * sc.spot_mult)
         shocked_vol = max(1e-8, vol * sc.vol_mult)
         shocked_rate = _clamp_rate(rate + sc.rate_shift)
-        p = _run_pricing(
-            {
-                "spot": shocked_spot,
-                "strike": strike,
-                "rate": shocked_rate,
-                "vol": shocked_vol,
-                "maturity": maturity,
-                "n_paths": n_paths,
-                "dividend_yield": dividend_yield,
-            }
-        )
-        mc = float(p.get("mc", 0.0))
-        bs = float(p.get("bs", 0.0))
-        bn = float(p.get("binomial", 0.0))
+        p = price(shocked_spot, shocked_vol, shocked_rate, sc.spot_mult, sc.vol_mult)
+        mc, bs, bn = p["mc"], p["bs"], p["binomial"]
 
         hedge_metrics = {}
         if include_hedge_compare:
@@ -183,7 +204,7 @@ def run_stress_library(
                 "binomial": bn,
                 "mc_shift_vs_base": mc - base_mc,
                 "bs_shift_vs_base": bs - base_bs,
-                "binomial_shift_vs_base": bn - base_bin,
+                "binomial_shift_vs_base": (bn - base_bin) if bn is not None and base_bin is not None else None,
                 "severity_score": abs(mc - base_mc),
                 "portfolio_correlation_score": (
                     abs((shocked_spot - spot) / max(spot, 1e-12)) * 0.40
@@ -215,6 +236,9 @@ def run_stress_library(
 
     return {
         "summary": {
+            "mode": "portfolio" if portfolio else "single_option",
+            "n_legs": len(legs) if portfolio else 1,
+            "hedge_compare": include_hedge_compare,
             "pack": stress_pack,
             "severity": stress_severity,
             "scenario_count": len(rows),

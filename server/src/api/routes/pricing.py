@@ -140,6 +140,7 @@ def tool_stress(req: StressLibraryRequest) -> dict:
             stress_pack=req.stress_pack,
             stress_severity=req.stress_severity,
             include_hedge_compare=req.include_hedge_compare,
+            legs=[leg.engine_payload() for leg in req.legs] if req.legs else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
