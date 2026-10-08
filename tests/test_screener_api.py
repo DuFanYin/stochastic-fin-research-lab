@@ -1,4 +1,4 @@
-"""Phase 3 API: /tool/screener/*, multi-leg per-leg overrides, portfolio stress.
+"""Screener API: /tool/screener/*, multi-leg per-leg overrides, portfolio stress.
 
 Offline: Deribit is served from the recorded fixture (see test_market_chain.FakeDeribit).
 Run:  server/.venv/bin/python tests/test_screener_api.py   (or pytest)

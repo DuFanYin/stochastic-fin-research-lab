@@ -6,15 +6,11 @@
 #include <string>
 #include <sys/resource.h>
 
-// Peak resident set size of this process in MiB (ru_maxrss is bytes on macOS, KiB on Linux).
+// Peak resident set size of this process in MiB (Linux reports ru_maxrss in KiB).
 inline double peak_rss_mib() {
     rusage u{};
     getrusage(RUSAGE_SELF, &u);
-#ifdef __APPLE__
-    return u.ru_maxrss / (1024.0 * 1024.0);
-#else
     return u.ru_maxrss / 1024.0;
-#endif
 }
 
 inline double now_ms() {

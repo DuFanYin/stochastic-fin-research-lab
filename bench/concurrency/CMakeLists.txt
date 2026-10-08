@@ -2,10 +2,6 @@
 # linked into sf_engine_c. Build and run everything with ./run.sh.
 cmake_minimum_required(VERSION 3.16)
 
-if(APPLE AND NOT DEFINED CMAKE_CXX_COMPILER AND EXISTS "/opt/homebrew/opt/llvm/bin/clang++")
-    set(CMAKE_CXX_COMPILER "/opt/homebrew/opt/llvm/bin/clang++" CACHE FILEPATH "C++ compiler" FORCE)
-endif()
-
 project(sf_concurrency_bench LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

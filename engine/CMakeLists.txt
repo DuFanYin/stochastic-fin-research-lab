@@ -1,9 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
 
-if(APPLE AND NOT DEFINED CMAKE_CXX_COMPILER AND EXISTS "/opt/homebrew/opt/llvm/bin/clang++")
-    set(CMAKE_CXX_COMPILER "/opt/homebrew/opt/llvm/bin/clang++" CACHE FILEPATH "C++ compiler" FORCE)
-endif()
-
 project(stochastic_finance_engine LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -46,6 +42,9 @@ add_library(sf_engine STATIC
     # API layer — JSON parse + serialize + dispatch (single file)
     src/api/parser.cpp
 )
+
+# Linked into the shared library below, so it must be position-independent.
+set_target_properties(sf_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(sf_engine
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src

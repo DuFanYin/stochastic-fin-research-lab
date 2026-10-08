@@ -34,6 +34,9 @@ try:
     )
     from option_calculator.types import ContractParams, ExerciseStyle, MarketParams, OptionType  # noqa: E402
 except ImportError as exc:  # numpy or QF-205 missing
+    if __name__ != "__main__":  # collected by pytest: skip this module, not the whole run
+        import pytest
+        pytest.skip(f"QF-205 reference unavailable ({exc})", allow_module_level=True)
     print(f"SKIP: QF-205 reference unavailable ({exc})")
     sys.exit(0)
 

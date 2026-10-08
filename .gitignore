@@ -1,5 +1,5 @@
-# OS / editor
-.DS_Store
+# Editor / local tools
+.claude/
 .idea/
 .vscode/
 *.swp
@@ -26,11 +26,7 @@ dist/
 
 # C/C++
 *.o
-*.obj
 *.a
-*.lib
-*.dll
-*.dylib
 *.so
 cmake-build-*/
 CMakeFiles/

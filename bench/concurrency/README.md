@@ -38,67 +38,69 @@ and `Queue/LockFreeQueue.hpp`.
 
 ## Results
 
-Apple M1 Pro (6 performance + 2 efficiency cores), Homebrew LLVM clang, `-O3` Release.
+AMD Ryzen 7 PRO 5850U (8 cores / 16 threads, laptop), GCC 15.2, `-O3` Release.
 
 ### Queue: 1 producer / 1 consumer, 10000000 uint64 messages, capacity 4096
 
 | impl | ms | msgs/s | in-order check |
 |---|---:|---:|---|
-| spsc | 294.49 | 33957063 | true |
-| locked | 407.34 | 24549662 | true |
+| spsc | 218.52 | 45763054 | true |
+| locked | 565.90 | 17671076 | true |
 
 ### LSM American put (S=K=100, r=5%, sigma=20%, T=1, 50 exercise dates), best of 5
 
 | paths | backend | threads | best ms | median ms | speed-up vs serial | peak RSS MiB | price |
 |---:|---|---:|---:|---:|---:|---:|---|
-| 50000 | serial | 1 | 63.35 | 66.66 | 1.00 | 22.2 | 6.0645050127586604 |
-| 50000 | omp | 1 | 66.65 | 72.81 | 0.95 | 22.0 | identical |
-| 50000 | omp | 2 | 35.00 | 37.51 | 1.81 | 22.7 | identical |
-| 50000 | omp | 4 | 19.99 | 21.31 | 3.17 | 22.8 | identical |
-| 50000 | omp | 8 | 18.96 | 20.44 | 3.34 | 22.9 | identical |
-| 50000 | pool | 1 | 66.54 | 67.11 | 0.95 | 21.7 | identical |
-| 50000 | pool | 2 | 34.87 | 35.74 | 1.82 | 21.8 | identical |
-| 50000 | pool | 4 | 20.91 | 21.50 | 3.03 | 21.8 | identical |
-| 50000 | pool | 8 | 21.90 | 22.67 | 2.89 | 21.8 | identical |
-| 200000 | serial | 1 | 259.94 | 265.17 | 1.00 | 84.0 | 6.062038622121114 |
-| 200000 | omp | 1 | 263.76 | 265.81 | 0.99 | 84.4 | identical |
-| 200000 | omp | 2 | 133.78 | 134.69 | 1.94 | 84.5 | identical |
-| 200000 | omp | 4 | 71.60 | 72.20 | 3.63 | 84.5 | identical |
-| 200000 | omp | 8 | 63.78 | 66.54 | 4.08 | 84.7 | identical |
-| 200000 | pool | 1 | 259.32 | 260.01 | 1.00 | 81.8 | identical |
-| 200000 | pool | 2 | 134.73 | 136.56 | 1.93 | 84.1 | identical |
-| 200000 | pool | 4 | 75.84 | 77.58 | 3.43 | 84.2 | identical |
-| 200000 | pool | 8 | 58.52 | 60.84 | 4.44 | 84.2 | identical |
-| 500000 | serial | 1 | 630.67 | 632.31 | 1.00 | 203.9 | 6.052335299964132 |
-| 500000 | omp | 1 | 649.15 | 651.34 | 0.97 | 204.3 | identical |
-| 500000 | omp | 2 | 331.13 | 332.84 | 1.90 | 204.3 | identical |
-| 500000 | omp | 4 | 172.58 | 173.52 | 3.65 | 204.4 | identical |
-| 500000 | omp | 8 | 144.55 | 155.08 | 4.36 | 204.6 | identical |
-| 500000 | pool | 1 | 648.24 | 649.45 | 0.97 | 202.1 | identical |
-| 500000 | pool | 2 | 336.12 | 349.80 | 1.88 | 204.1 | identical |
-| 500000 | pool | 4 | 185.83 | 186.90 | 3.39 | 204.1 | identical |
-| 500000 | pool | 8 | 140.70 | 143.70 | 4.48 | 204.1 | identical |
+| 50000 | serial | 1 | 73.90 | 75.70 | 1.00 | 24.2 | 6.0645050127586604 |
+| 50000 | omp | 1 | 80.57 | 81.87 | 0.92 | 24.2 | identical |
+| 50000 | omp | 2 | 50.31 | 52.98 | 1.47 | 24.3 | identical |
+| 50000 | omp | 4 | 31.24 | 32.48 | 2.37 | 24.3 | identical |
+| 50000 | omp | 16 | 15.12 | 22.11 | 4.89 | 24.4 | identical |
+| 50000 | pool | 1 | 88.53 | 91.26 | 0.83 | 24.3 | identical |
+| 50000 | pool | 2 | 53.88 | 54.92 | 1.37 | 24.4 | identical |
+| 50000 | pool | 4 | 34.67 | 36.72 | 2.13 | 24.2 | identical |
+| 50000 | pool | 16 | 27.44 | 29.75 | 2.69 | 24.3 | identical |
+| 200000 | serial | 1 | 373.75 | 375.85 | 1.00 | 84.3 | 6.062038622121114 |
+| 200000 | omp | 1 | 382.83 | 385.61 | 0.98 | 84.1 | identical |
+| 200000 | omp | 2 | 245.60 | 246.22 | 1.52 | 84.4 | identical |
+| 200000 | omp | 4 | 168.45 | 171.92 | 2.22 | 84.2 | identical |
+| 200000 | omp | 16 | 110.22 | 114.24 | 3.39 | 84.3 | identical |
+| 200000 | pool | 1 | 388.87 | 392.66 | 0.96 | 84.3 | identical |
+| 200000 | pool | 2 | 252.45 | 254.09 | 1.48 | 84.3 | identical |
+| 200000 | pool | 4 | 178.07 | 180.66 | 2.10 | 84.2 | identical |
+| 200000 | pool | 16 | 149.07 | 152.43 | 2.51 | 84.2 | identical |
+| 500000 | serial | 1 | 935.10 | 941.38 | 1.00 | 204.5 | 6.0523352999641302 |
+| 500000 | omp | 1 | 969.17 | 971.68 | 0.96 | 204.4 | identical |
+| 500000 | omp | 2 | 619.03 | 625.79 | 1.51 | 204.3 | identical |
+| 500000 | omp | 4 | 433.16 | 435.99 | 2.16 | 204.3 | identical |
+| 500000 | omp | 16 | 278.87 | 293.51 | 3.35 | 204.6 | identical |
+| 500000 | pool | 1 | 972.15 | 978.35 | 0.96 | 204.7 | identical |
+| 500000 | pool | 2 | 635.55 | 638.99 | 1.47 | 204.8 | identical |
+| 500000 | pool | 4 | 450.18 | 452.21 | 2.08 | 204.6 | identical |
+| 500000 | pool | 16 | 380.79 | 386.10 | 2.46 | 204.4 | identical |
 
 ## Reading the numbers
 
 - **Determinism.** Every executor and thread count gives the bit-identical price.
   Each 1024-path chunk owns its RNG stream and its partial sums, and the sums are
   combined in chunk order, so the scheduling strategy cannot change the result.
-- **OpenMP vs thread pool.** Within noise of each other at 200k–500k paths. At 50k
-  paths and 8 threads the pool is about 15% slower: one LSM valuation enters ~100
+- **OpenMP vs thread pool.** At 1–4 threads the pool is within 6% of OpenMP at
+  200k–500k paths and within 11% at 50k. At 16 threads it takes about 1.35× as long
+  at 200k–500k paths and 1.8× at 50k: one LSM valuation enters ~100
   parallel regions, and the pool pays a locked queue push, a `std::function`
   allocation and a condition-variable wake-up per chunk, where OpenMP reuses a
   persistent team with a static schedule.
-- **Scaling** flattens at about 4.4× on 8 threads: two of the eight cores are
-  efficiency cores, and every exercise date streams the whole path matrix through
+- **Scaling** flattens at about 3.4× on 16 threads (4.9× at 50k paths, the
+  smallest matrix): the 16 threads are 8 cores with SMT, the laptop clocks down
+  as more cores run, and every exercise date streams the whole path matrix through
   memory, so the regression passes become bandwidth-bound.
 - **Memory** does not depend on the executor. Peak RSS is the step-major path
   matrix, `paths × (steps + 1) × 8` bytes (≈ 204 MB for 500k × 51).
-- **Queues.** The lock-free SPSC queue moves about 1.4× the messages of the
+- **Queues.** The lock-free SPSC queue moves about 2.6× the messages of the
   mutex-protected ring buffer for one producer and one consumer, with both
   passing the in-order check.
 
-**Why the engine uses OpenMP:** equal or better speed at every size measured, no
+**Why the engine uses OpenMP:** equal or better speed in every cell measured, no
 thread lifecycle or task queue to maintain, and the same determinism guarantee as
 long as work is split by fixed chunks. The thread pool earns its keep only for
 irregular, long-lived task graphs, which the engine does not have.

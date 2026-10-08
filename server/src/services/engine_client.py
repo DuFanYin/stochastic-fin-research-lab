@@ -6,12 +6,8 @@ from pathlib import Path
 
 def _load_lib() -> CDLL | None:
     project_root = Path(__file__).resolve().parents[3]
-    build_dir = project_root / "engine" / "build"
-    for name in ("libsf_engine_c.dylib", "libsf_engine_c.so", "sf_engine_c.dll"):
-        p = build_dir / name
-        if p.exists():
-            return CDLL(str(p))
-    return None
+    p = project_root / "engine" / "build" / "libsf_engine_c.so"
+    return CDLL(str(p)) if p.exists() else None
 
 
 _lib = _load_lib()

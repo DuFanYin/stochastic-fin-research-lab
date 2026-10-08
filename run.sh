@@ -22,14 +22,7 @@ if [ "$DO_BUILD" = "build" ] && [ -d "$ENGINE_DIR" ]; then
     fi
   fi
 
-  if [[ "$(uname -s)" == "Darwin" && -x "/opt/homebrew/opt/llvm/bin/clang++" ]]; then
-    echo "Using Homebrew LLVM clang++ for OpenMP support on macOS."
-    cmake -S . -B build \
-      -DCMAKE_BUILD_TYPE="Release" \
-      -DCMAKE_CXX_COMPILER="/opt/homebrew/opt/llvm/bin/clang++"
-  else
-    cmake -S . -B build -DCMAKE_BUILD_TYPE="Release"
-  fi
+  cmake -S . -B build -DCMAKE_BUILD_TYPE="Release"
   cmake --build build -j >/dev/null
   echo "C++ build completed: $ENGINE_DIR/build (Release)"
 fi
@@ -70,5 +63,5 @@ if [ -n "${PIDS:-}" ]; then
   fi
 fi
 
-exec ".venv/bin/python" -m uvicorn main:app --reload
+exec ".venv/bin/python" -m uvicorn main:app --reload --port "$PORT"
 

@@ -1,4 +1,4 @@
-"""Phase 4 pricing methods: trinomial, LSM, explicit / American PDE, put and dividend handling.
+"""Pricing methods added from QF-205 and Option-Pricing: trinomial, LSM, explicit / American PDE, put and dividend handling.
 
 Run:  server/.venv/bin/python tests/test_pricing_methods.py   (or pytest)
 """
@@ -45,7 +45,7 @@ def pde(**kw):
     return r["result_summary"]
 
 
-# ── Put and dividend handling (fixed in Phase 4) ─────────────────────────────
+# ── Put and dividend handling (fixed in the port) ────────────────────────────
 
 def test_put_is_priced_as_put_through_the_api():
     with TestClient(main.app) as c:

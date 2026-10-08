@@ -2,7 +2,7 @@
 
 // Option strategy screener — kernel primitives.
 // Ported from option-screener@8b31b95 (cpp/include/{object,factory,strategy}/*.hpp)
-// and its Python-only ForwardVolsGenerator. See MERGE_PLAN.md Phase 1 for the
+// and its Python-only ForwardVolsGenerator. See DOCUMENTATION.md §9 for the
 // list of behavioural fixes relative to the original.
 
 #include <array>
