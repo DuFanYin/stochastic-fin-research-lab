@@ -1,7 +1,7 @@
-# Quant Lab — Documentation
+# Quant Lab: documentation
 
-How Quant Lab is built and what each part does, as of the current `main`. Setup and a short tour are in
-[README.md](README.md); what is still to be built is in [ROADMAP.md](ROADMAP.md).
+How Quant Lab is built and what each part does, as of the current `main`. Setup and a tour are in [README.md](README.md)
+([中文](README.zh-CN.md)); what is still to be built is in [ROADMAP.md](ROADMAP.md).
 
 1. [Architecture](#1-architecture)
 2. [C++ engine](#2-c-engine)
@@ -9,10 +9,11 @@ How Quant Lab is built and what each part does, as of the current `main`. Setup 
 4. [Market data](#4-market-data)
 5. [HTTP API](#5-http-api)
 6. [Workbench](#6-workbench)
-7. [Contracts and versioning](#7-contracts-and-versioning)
-8. [Testing and verification](#8-testing-and-verification)
-9. [Where the code came from](#9-where-the-code-came-from)
-10. [Course coverage](#10-course-coverage)
+7. [The public lab](#7-the-public-lab)
+8. [Contracts and versioning](#8-contracts-and-versioning)
+9. [Testing and verification](#9-testing-and-verification)
+10. [Where the code came from](#10-where-the-code-came-from)
+11. [Course coverage](#11-course-coverage)
 
 ---
 
@@ -22,7 +23,8 @@ Three layers, and the split between them is permanent:
 
 - **C++ engine**: all numerical computation, including the screener's filtering, enumeration and ranking. No I/O, no business logic.
 - **Python server** (FastAPI): fetches market data, validates requests, routes them to the engine, annotates and aggregates results. Nothing numerical.
-- **Browser** (one page, no framework): rendering, parameter management and workflow orchestration. No logic.
+- **Browser** (one page: Preact and Tailwind, built by Vite): rendering, parameter management and workflow orchestration. No
+  numerics.
 
 Every feature travels the same path from the bottom of the stack to the top:
 
@@ -34,13 +36,13 @@ kernel/*.cpp            numerical primitive
         → engine_client.py        Python wrapper (ctypes)
           → routes/*.py             FastAPI route
             → request_models.py       Pydantic schema
-              → workbench.html + js     frontend
+              → web/src/modes/*.jsx      frontend
 ```
 
 A change that touches only the bottom of this chain is a frontend patch; one that starts at the top is a full-stack change.
 
 Everything runs locally from `./run.sh`: no cloud service, no database, no authentication. Market data comes from public endpoints
-that need no API key.
+that need no API key. A public copy runs at [dufanyin.dev/lab](https://dufanyin.dev/lab/) (§7).
 
 ## 2. C++ engine
 
@@ -110,7 +112,8 @@ condor, calendar, or custom. The result has per-leg prices and net Greeks.
 - **Heston** price from the characteristic function (Heston 1993 with the AMST branch-cut-stable form), Gil-Pelaez inversion,
   Simpson quadrature with M = 512 on [1e-5, 100]. It reduces to Black-Scholes within 1e-4 in the flat-vol limit.
 - **Heston calibration**: bounded five-parameter Nelder-Mead minimising RMSE against market prices (RMSE 0.0001 on a flat
-  Black-Scholes smile).
+  Black-Scholes smile). The fit is graded by the RMSE as a share of the average quote (`rmse_rel`): good under 2%, fair under 5%,
+  so the grade reads the same for a 10-dollar equity option and a 6,000-dollar BTC option.
 
 ### Greek surfaces
 
@@ -146,8 +149,10 @@ strategy in (transaction cost, ES95) space, the Pareto-optimal ones highlighted.
 
 ### Stochastic calculus checks
 
-- Normal distribution: analytical MGF against sample mean and variance.
-- Itô's formula: the exponential martingale, W² − t, and W³, theory against simulation.
+- Normal distribution: the sample MGF, mean and variance of `sample_size` seeded draws, returned with the exact values they
+  estimate (`mgf_exact`, `mean_exact`, `variance_exact`).
+- Itô's formula: the exponential martingale, W² − t, and W³. E[f(W_t)] by Monte Carlo (200k exact draws of W_t) against
+  theory, and the formula itself on discrete paths: f(W_t) − f(0) against Σ f′ΔW + Σ (∂ₜf + ½f″)Δt, a gap that shrinks like √Δt.
 - Path simulation: GBM and Vasicek, up to 500k steps.
 - Change of measure: Radon-Nikodym density path and market price of risk θ = (μ − r)/σ; P vs Q comparison over many paths
   (terminal statistics, drift and variance ratios).
@@ -168,13 +173,13 @@ A quality gate that can run before any computation. The checks are grouped by ca
 | Capability | Checks |
 |---|---|
 | Stats | sample mean and variance against the analytical values |
-| Itô | expectation gap between simulation and theory |
+| Itô | E[f(W_t)] against theory; Itô's formula on paths of `ito_n` steps (relative RMS gap ≤ 0.05) |
 | Simulation | terminal values finite; delta-hedge P&L spread relative to spot |
 | Lattice | trinomial vs Black-Scholes; LSM and CN + PSOR vs binomial American |
 
 The gate returns go / warn / block, failure counts per capability and the worst violation. Every failure has its threshold,
-actual value and a suggested fix. **Explainable QA** ranks six fix templates (more paths, more Itô steps, smaller dt, more
-rebalances, longer convergence ladder, finer PDE grid) by expected gain / cost, picks the smallest set that covers every failure,
+actual value and a suggested fix. **Explainable QA** ranks eight fix templates (more paths, a larger stats sample, more Itô steps, a
+smaller Itô θ, smaller dt, more rebalances, longer convergence ladder, finer PDE grid) by expected gain / cost, picks the smallest set that covers every failure,
 and projects the gate outcome after applying it.
 
 ### Screener
@@ -224,7 +229,7 @@ Every response says which source it used. `server/fixtures/record_deribit.py` re
 
 ## 5. HTTP API
 
-Interactive documentation is served at `/docs`. Tool routes return one of two envelopes, both built in
+Interactive documentation is served at `/docs` (not on the public lab). Tool routes return one of two envelopes, both built in
 `server/src/api/shared.py`:
 
 - Routes that pass the request straight to the engine (`dispatch_task()`; for example `pricing/run`, `hedging/run`,
@@ -271,7 +276,42 @@ Interactive documentation is served at `/docs`. Tool routes return one of two en
 
 ## 6. Workbench
 
-`static/workbench.html` is the only page. It has three columns: parameters, mode, and results.
+The workbench is one page, built from `web/` into `static/` (served at `/`; `/workbench.html` redirects there). Preact for the
+components, `@preact/signals` for state, Tailwind for the styles, Vite to build; no chart library. Every URL is relative, so it
+runs under any path prefix (the public copy is at `/lab/`).
+
+```
+web/
+  index.html              the page's head: title, description, canonical URL, link-preview tags, structured data; a static
+                          introduction that crawlers read and the app replaces when it starts
+  public/                 favicon.svg; og.png, the link-preview image (1200 × 630)
+  src/
+    main.jsx, app.jsx     entry; the shell: top bar, mode tabs, inputs, results, the Run button
+    styles.css            Tailwind and the colour tokens (light, and dark with the system): change a colour here, once
+    lib/                  api.js (requests; the public budget), store.js (every parameter, saved in localStorage; settings;
+                          results), payloads.js (request bodies), live.js (market data), runner.js (run states), format.js
+    ui/                   controls bound to the store (Num, Seg, Toggle, Chips, ...), result blocks (Card, Kv, Table, Slot),
+                          dialog.jsx (windows), toasts
+    charts/               SVG charts sized to their box and coloured by the theme: line, bars, histogram, heatmap, frontier
+    modes/                one file per mode: its description (about), inputs (Params), run, result cards (Results);
+                          legs.jsx (the legs editor); index.js lists them in tab order
+```
+
+`cd web && npm ci && npm run build` rebuilds `static/` (commit it with the source); `npm run dev` serves the page with hot
+reload and sends `/api` to a server on port 8010 (`PORT=8010 ./run.sh`).
+
+**Layout.** The top bar has the name, Live / Sim, the live market (BTC, DVOL, r, μ, the time of the last fetch, refresh), the
+number of decimals shown, and the link to the source on GitHub. Under it are the mode tabs. On the left are the inputs of the
+current mode; on the right its results, as cards in one to three columns by width. Before the first run the results show what
+the mode does.
+
+**Run.** The page has one Run button: at the top right of the results on a wide screen, under the inputs on a narrow one; ⌘↵ or
+Ctrl+Enter does the same. On the public lab the results header also shows how much computing time is left (§7).
+
+**Windows.** Inputs too big for the sidebar open in a window from their summary:
+- the legs of a position (Multi-Leg, Risk's portfolio), as a table with starting strategies (straddle, strangle, bull call
+  spread, iron condor around the strike) or as JSON;
+- the Screener's strategy filter.
 
 **Live / Sim.** In Live mode spot, vol, rate and drift come from the market endpoints and are read-only. Changing the strike or
 maturity resolves vol and rate from the surface. In Sim mode every input is editable.
@@ -282,15 +322,46 @@ maturity resolves vol and rate from the surface. In Sim mode every input is edit
 | Multi-Leg | multi-leg pricing from the legs editor |
 | Risk | stress library and the hedge comparison |
 | Numerics | PDE, convergence, benchmark, and P vs Q or RN density |
-| Validation Only | the validation gate on its own |
 | Screener | Strategies view (funnel counts, top-N table, per-row legs, payoff at expiry, break-evens) and Chain view (expiries with implied carry, OTM smile, chain table) |
+| Validation | the validation gate on its own: each check against its threshold, and what to change when one fails |
 
-Any mode except Screener can run the validation gate first ("Pre-check"), as advice or as a block ("Block on Fail"). Charts are
-drawn on Canvas / SVG without a chart library: sparklines, line and dual-line charts, tornado, grouped bars, P&L histogram with
-quantile lines, IV heatmap with burst zones, term structure, smile, Greek heatmap, threshold-vs-value, efficiency frontier, and
-payoff diagrams. Parameters persist in `localStorage`.
+Any mode except Screener can run the validation gate first ("Validate first"), as advice or as a block ("Block on fail"); its
+report is the first card of the results. A Screener row goes to Multi-Leg or Risk in one click (the tab switches and runs).
 
-## 7. Contracts and versioning
+**Charts.**
+- Lines, with a hover readout: term structure, smile, convergence, paths, payoff.
+- Bars: the tornado, rankings, and each check's value as a share of its threshold.
+- The P&L histogram, with quantile marks.
+- Heatmaps: the IV and Greek surfaces.
+- The hedge efficiency frontier.
+
+Every input persists in `localStorage` ("Reset inputs" restores the defaults).
+
+**Search and link previews.** `index.html` carries:
+- a title and description;
+- a canonical URL pointing at the public copy;
+- Open Graph and Twitter tags, with `og.png` as the preview image;
+- schema.org `WebApplication` data.
+
+Its static introduction gives crawlers the same text a visitor reads; `main.jsx` clears it before the app renders.
+
+## 7. The public lab
+
+[dufanyin.dev/lab](https://dufanyin.dev/lab/) runs this repository for anyone. A proxy in front of it (not in this repository)
+keeps one visitor from crowding out the others. Per address (an IPv6 address by its /64) it allows:
+
+| Limit | Value |
+|---|---|
+| Computing time | a budget of 120 s, refilled over 10 minutes. A computation may start while some is left and is charged the seconds it took (at least 0.05 s). A Pricing run takes about 3 s; the other modes take well under 1 s. |
+| API calls | 600 per 10 minutes |
+| At once | 2 computations per address and 3 in all; the rest wait their turn, up to 60 s |
+| Request body | 256 KB |
+| Heavy parameters | paths 200,000 (LSM 50,000); steps 20,000 (Itô and measure 200,000); samples 1,000,000; rebalances and optimiser iterations 1,000; batches 50 jobs; 60 s per request |
+
+The `x-lab-budget` response header carries the seconds left, which the page shows. A refusal (429) says when to come back
+(`Retry-After`). The public copy runs on four cores and 2 GB. Run the lab yourself for no limits.
+
+## 8. Contracts and versioning
 
 - Every new field in a response struct has a default, so callers that ignore unknown fields keep working.
 - New routes are additive; an existing route never changes its response shape, it only gains fields.
@@ -299,11 +370,12 @@ payoff diagrams. Parameters persist in `localStorage`.
 - `contract_version`: the engine's task envelope reports `v1`; the screener's engine output reports `v1.3` (screener,
   per-leg vol / maturity / forward, trinomial, LSM, explicit and American PDE).
 
-## 8. Testing and verification
+## 9. Testing and verification
 
 | Test | Checks | Count |
 |---|---|---:|
 | `tests/test_pricing_methods.py` | trinomial, LSM, explicit and American PDE, puts, dividend handling | 11 |
+| `tests/test_theory_checks.py` | sample moments converge; Itô's expectation holds and its formula residual shrinks like √Δt; the default gate passes and a coarse one names the right fix | 4 |
 | `tests/test_screener.py` | filters, generators, ranking, bounded top-N, the fixed defects of the original screener | 21 |
 | `tests/test_screener_api.py` | screener routes, offline fallback, snapshots, Multi-Leg hand-off, portfolio stress | 10 |
 | `tests/test_market_chain.py` | chain normalisation, caching, fallbacks (offline; `QUANT_LAB_LIVE=1` adds a live delta comparison) | 12 |
@@ -321,9 +393,10 @@ Results recorded when these methods were added:
   Explicit vs Crank-Nicolson within 5e-4.
 - The ported screener matched the original binary row for row on five filter configurations over a PLTR chain, apart from the
   defects deliberately fixed (iron condor max gain / loss). That one-off check is no longer in the tree.
-- The full screener flow was exercised in a real browser (Playwright) with no JavaScript errors.
+- Every mode, the windows and the hand-offs were exercised in a real browser (Playwright), light and dark, desktop and phone
+  widths, through the public lab's CSP, with no JavaScript errors.
 
-## 9. Where the code came from
+## 10. Where the code came from
 
 Quant Lab absorbed three earlier projects. Ported files name their source commit in the header.
 
@@ -355,7 +428,7 @@ Defects fixed during the port:
   - `pricing_bundle` ignored `steps`;
   - a late Live response could overwrite Sim inputs.
 
-## 10. Course coverage
+## 11. Course coverage
 
 Quant Lab started as an executable companion to a nine-session risk-neutral pricing course; each topic has a live, parameterised
 compute path.
@@ -365,7 +438,7 @@ compute path.
 | 1–2 | Probability and statistics | `stats/run`: MGF, moment checks |
 | 3 | Discrete processes, binomial trees | binomial pricing, `convergence/run` |
 | 4 | Brownian motion | `simulation/run` |
-| 5 | Itô calculus | `ito/run`, validation expectation gap |
+| 5 | Itô calculus | `ito/run`, validation expectation gap and formula residual |
 | 6 | SDE numerics | GBM and Vasicek paths, discretisation checks |
 | 7 | Girsanov, change of measure | `measure/run`, `measure/compare` |
 | 8 | Risk-neutral pricing | multi-method pricing, calibration, benchmark |
