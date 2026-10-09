@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
 
 namespace sf {
 
@@ -31,13 +32,23 @@ double interp_quantile_sorted(const std::vector<double>& sorted_xs, double q) {
 }
 
 void stats_normal(
-    double mu, double sigma, double theta, int /*sample_size*/,
+    double mu, double sigma, double theta, int sample_size,
     double* out_mgf, double* out_mean, double* out_variance
 ) {
     const double s = clamp_positive(sigma);
-    if (out_mgf)      *out_mgf      = std::exp(mu * theta + 0.5 * s * s * theta * theta);
-    if (out_mean)     *out_mean     = mu;
-    if (out_variance) *out_variance = s * s;
+    const int    n = std::max(sample_size, 2);
+    std::mt19937_64 rng(7);
+    std::normal_distribution<double> z(mu, s);
+    double mean = 0.0, m2 = 0.0, mgf = 0.0;
+    for (int k = 0; k < n; ++k) {
+        const double x = z(rng), d = x - mean;
+        mean += d / (k + 1);
+        m2   += d * (x - mean);
+        mgf  += (std::exp(theta * x) - mgf) / (k + 1);
+    }
+    if (out_mgf)      *out_mgf      = mgf;
+    if (out_mean)     *out_mean     = mean;
+    if (out_variance) *out_variance = m2 / (n - 1);
 }
 
 double stats_mgf(double mu, double sigma, double theta) {

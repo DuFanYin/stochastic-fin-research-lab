@@ -197,16 +197,22 @@ struct SimulationResult {
     std::vector<double> values;
 };
 
-struct StatsResult {
+struct StatsResult {   // sample moments, with the exact ones they estimate
     double mgf      = 0.0;
     double mean     = 0.0;
     double variance = 0.0;
+    double mgf_exact      = 0.0;
+    double mean_exact     = 0.0;
+    double variance_exact = 0.0;
 };
 
 struct ItoResult {
     std::string function_type;
-    double value  = 0.0;
-    double target = 0.0;
+    double value     = 0.0;
+    double target    = 0.0;
+    double std_error = 0.0;
+    double residual  = 0.0;
+    int    paths     = 0;
 };
 
 struct MeasureDensityResult {

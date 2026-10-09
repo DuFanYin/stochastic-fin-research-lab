@@ -43,11 +43,19 @@ double sample_variance          (const std::vector<double>& xs);
 double interp_quantile_sorted   (const std::vector<double>& sorted_xs, double q);
 
 double stats_mgf(double mu, double sigma, double theta);
+// Sample moments of `sample_size` draws from N(mu, sigma²): E[e^{θX}], mean, variance.
 void   stats_normal(double mu, double sigma, double theta, int sample_size,
                     double* out_mgf, double* out_mean, double* out_variance);
 
-void ito_check(int function_code, double theta, double t, int n_steps,
-               double* out_value, double* out_target);
+// Itô checks on f(W) (0: e^{θW − θ²t/2}, 1: W² − t, 2: W³).
+struct ItoCheck {
+    double value     = 0.0;   // E[f(W_t)] by Monte Carlo
+    double target    = 0.0;   // its exact value
+    double std_error = 0.0;   // of value
+    double residual  = 0.0;   // RMS gap of the discretised Itô formula over the paths, relative to f(W_t) − f(0)
+    int    paths     = 0;     // paths of n_steps the residual was measured on
+};
+ItoCheck ito_check(int function_code, double theta, double t, int n_steps);
 
 // ── MC Sampler ────────────────────────────────────────────────────────────────
 

@@ -449,7 +449,8 @@ std::string run_stats_json(const std::string& src, double t0_ms) {
     if (!ctx) return ctx.error();
     const auto r = run_stats(parse_stats_params(ctx->body));
     json jj = base_envelope(ctx->trace_id);
-    jj["result_summary"] = {{"mgf",r.mgf},{"mean",r.mean},{"variance",r.variance}};
+    jj["result_summary"] = {{"mgf",r.mgf},{"mean",r.mean},{"variance",r.variance},{"mgf_exact",r.mgf_exact},
+                              {"mean_exact",r.mean_exact},{"variance_exact",r.variance_exact}};
     jj["diagnostics"]    = diag_block(elapsed_ms(t0_ms), "stats");
     return jj.dump();
 }
@@ -460,7 +461,8 @@ std::string run_ito_json(const std::string& src, double t0_ms) {
     const auto r = run_ito(parse_ito_params(ctx->body));
     json jj = base_envelope(ctx->trace_id);
     jj["result_summary"] = {{"function_type",r.function_type},{"value",r.value},
-                              {"target_expectation",r.target}};
+                              {"target_expectation",r.target},{"std_error",r.std_error},
+                              {"formula_residual",r.residual},{"paths",r.paths}};
     jj["diagnostics"] = diag_block(elapsed_ms(t0_ms), "ito_check");
     return jj.dump();
 }

@@ -20,15 +20,15 @@ SimulationResult run_simulation(const SimulationParams& p) {
 StatsResult run_stats(const StatsParams& p) {
     double mgf = 0.0, mean = 0.0, var = 0.0;
     stats_normal(p.mu, p.sigma, p.theta, p.sample_size, &mgf, &mean, &var);
-    return StatsResult{mgf, mean, var};
+    const double s = clamp_positive(p.sigma);
+    return StatsResult{mgf, mean, var, stats_mgf(p.mu, p.sigma, p.theta), p.mu, s * s};
 }
 
 ItoResult run_ito(const ItoParams& p) {
     const int code = (p.function_type == "w2_minus_t") ? 1
                    : (p.function_type == "w3")         ? 2 : 0;
-    double val = 0.0, target = 0.0;
-    ito_check(code, p.theta, p.t, p.n_steps, &val, &target);
-    return ItoResult{p.function_type, val, target};
+    const ItoCheck c = ito_check(code, p.theta, p.t, p.n_steps);
+    return ItoResult{p.function_type, c.value, c.target, c.std_error, c.residual, c.paths};
 }
 
 MeasureDensityResult run_measure_density(const MeasureDensityParams& p) {

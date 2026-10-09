@@ -24,8 +24,6 @@ ACTION_TEMPLATES: tuple[ActionTemplate, ...] = (
         cost=2.0,
         rationale="Higher Monte Carlo paths reduce sampling noise and stabilize tail metrics.",
         covers=(
-            ("stats", "mean_error"),
-            ("stats", "variance_error"),
             ("measure_compare", "var_gap_abs"),
             ("measure_compare", "path_dispersion_gap_abs"),
             ("pricing_batch", "spread_cv"),
@@ -33,10 +31,24 @@ ACTION_TEMPLATES: tuple[ActionTemplate, ...] = (
         ),
     ),
     ActionTemplate(
+        action_id="increase_stats_sample",
+        param="stats_n",
+        cost=1.0,
+        rationale="A larger sample brings the sample moments closer to the exact ones (error ~ 1/sqrt(n)).",
+        covers=(("stats", "mean_error"), ("stats", "variance_error")),
+    ),
+    ActionTemplate(
         action_id="increase_ito_steps",
         param="ito_n",
         cost=1.2,
-        rationale="Finer Ito discretization reduces martingale expectation drift.",
+        rationale="Finer steps shrink the gap in Ito's formula on discrete paths (~ sqrt(dt)).",
+        covers=(("ito", "formula_residual"),),
+    ),
+    ActionTemplate(
+        action_id="lower_ito_theta",
+        param="ito_theta",
+        cost=1.0,
+        rationale="With a large theta^2 t the exponential martingale's mean rests on rare paths that sampling misses.",
         covers=(("ito", "expectation_gap"),),
     ),
     ActionTemplate(
@@ -96,6 +108,10 @@ def _severity(row: dict[str, Any]) -> str:
 def _propose_value(param: str, req: dict[str, Any]) -> Any:
     if param == "n_paths":
         return max(int(_safe_num(req.get("n_paths"), 20000)), 20000) * 4
+    if param == "stats_n":
+        return max(int(_safe_num(req.get("stats_n"), 10000)), 10000) * 4
+    if param == "ito_theta":
+        return round(_safe_num(req.get("ito_theta"), 0.7) / 2, 4)
     if param == "ito_n":
         return max(int(_safe_num(req.get("ito_n"), 2000)), 2000) * 2
     if param == "sim_dt":
@@ -177,6 +193,7 @@ def build_explainable_qa(rows: list[dict[str, Any]], summary: dict[str, Any], re
                 "priority_score": expected_gain / template.cost,
                 "cost_score": template.cost,
                 "rationale": template.rationale,
+                "param": template.param,
                 "current_value": req.get(template.param),
                 "proposed_value": _propose_value(template.param, req),
                 "covers_metrics": [f"{cap}.{metric}" for cap, metric in covered_pairs],

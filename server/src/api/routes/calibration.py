@@ -96,9 +96,11 @@ async def run_heston_calibrate(req: HestonCalibrateRequest) -> dict:
     summary = {k: result[k] for k in ("v0","kappa","theta","xi","rho",
                                        "rmse","max_abs_error","iterations","converged")}
     details = {k: result[k] for k in ("model_prices", "residuals")}
-    # Add smile quality badge
-    rmse = result.get("rmse", 999.0)
-    summary["fit_quality"] = "good" if rmse < 0.5 else "fair" if rmse < 2.0 else "poor"
+    # The fit's quality from the RMSE as a share of the average quote, so it reads the same at any price level
+    scale = sum(abs(p) for p in req.market_prices) / max(len(req.market_prices), 1)
+    rel = result.get("rmse", float("inf")) / scale if scale > 0 else float("inf")
+    summary["rmse_rel"] = rel
+    summary["fit_quality"] = "good" if rel < 0.02 else "fair" if rel < 0.05 else "poor"
     return _record(
         tool_name="heston_calibrate",
         input_params={"spot": req.spot, "rate": req.rate, "n_points": len(req.market_prices)},

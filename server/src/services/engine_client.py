@@ -210,11 +210,10 @@ def stats_normal(mu: float, sigma: float, theta: float, sample_size: int) -> dic
     if r.get("status") == "error":
         import math
         s = max(sigma, 1e-8)
-        return {"mgf": math.exp(mu * theta + 0.5 * s * s * theta * theta),
-                "mean": mu, "variance": s * s}
+        exact = {"mgf": math.exp(mu * theta + 0.5 * s * s * theta * theta), "mean": mu, "variance": s * s}
+        return {**exact, **{f"{k}_exact": v for k, v in exact.items()}}
     s = r.get("result_summary", {})
-    return {"mgf": s.get("mgf", 0.0), "mean": s.get("mean", 0.0),
-            "variance": s.get("variance", 0.0)}
+    return {k: s.get(k, 0.0) for k in ("mgf", "mean", "variance", "mgf_exact", "mean_exact", "variance_exact")}
 
 
 def ito_check(function_type: str, theta: float, t: float, n_steps: int) -> dict:
@@ -223,11 +222,11 @@ def ito_check(function_type: str, theta: float, t: float, n_steps: int) -> dict:
     })
     if r.get("status") == "error":
         return {"function_type": function_type, "value": 0.0,
-                "target_expectation": 1.0 if function_type == "exp_martingale" else 0.0}
+                "target_expectation": 1.0 if function_type == "exp_martingale" else 0.0,
+                "std_error": 0.0, "formula_residual": 0.0, "paths": 0}
     s = r.get("result_summary", {})
     return {"function_type": s.get("function_type", function_type),
-            "value": s.get("value", 0.0),
-            "target_expectation": s.get("target_expectation", 0.0)}
+            **{k: s.get(k, 0.0) for k in ("value", "target_expectation", "std_error", "formula_residual", "paths")}}
 
 
 def measure_density_path(mu: float, r: float, sigma: float, t: float, n_steps: int) -> list[float]:

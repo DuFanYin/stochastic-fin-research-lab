@@ -16,6 +16,7 @@ constexpr double T_DENSITY_INTEGRAL  = 0.25;
 constexpr double T_DENS_CV           = 2.0;
 constexpr double T_DENS_TAIL         = 100.0;
 constexpr double T_ITO_ERR_SCALE     = 0.15;
+constexpr double T_ITO_RESIDUAL      = 0.05;
 constexpr double T_NORM_STD          = 0.25;
 constexpr double T_TRI_VS_BS         = 1e-3;
 constexpr double T_LSM_VS_BIN        = 0.02;
@@ -61,12 +62,13 @@ ValidationResult run_validation(const ValidationParams& p) {
     if (p.pick_ito) {
         const int fcode = (p.ito_function_type == "w2_minus_t") ? 1
                         : (p.ito_function_type == "w3")         ? 2 : 0;
-        double val = 0.0, target = 0.0;
-        ito_check(fcode, p.ito_theta, p.ito_t, p.ito_n, &val, &target);
-        const double diff = std::abs(val - target);
-        const double tol  = std::max(1e-3, T_ITO_ERR_SCALE * std::max(std::abs(target), 1.0));
+        const ItoCheck c = ito_check(fcode, p.ito_theta, p.ito_t, p.ito_n);
+        const double diff = std::abs(c.value - c.target);
+        const double tol  = std::max(1e-3, T_ITO_ERR_SCALE * std::max(std::abs(c.target), 1.0));
         rows.push_back(make_row("ito", "expectation_gap", diff, tol, diff <= tol,
-            "martingale expectation", "increase n_steps or use simpler function_type"));
+            "martingale expectation", "lower theta or t: with a large theta^2 t the mean rests on rare paths"));
+        rows.push_back(make_row("ito", "formula_residual", c.residual, T_ITO_RESIDUAL, c.residual <= T_ITO_RESIDUAL,
+            "Ito's formula on discrete paths", "increase n_steps: the gap shrinks like sqrt(dt)"));
     }
 
     if (p.pick_simulation) {
