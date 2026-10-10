@@ -3,7 +3,7 @@ endpoints (market) and the raw engine dispatch (task)."""
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 from quantlab.api.routes.market import router as market_router
 from quantlab.api.routes.task import router as task_router
@@ -11,7 +11,10 @@ from quantlab.tools import TOOLS, Tool, run_tool
 
 
 def _endpoint(tool: Tool):
-    if tool.method == "GET":
+    if "{" in tool.path:  # path parameters (get_run): the model is read from the path and the query together
+        async def endpoint(request: Request) -> dict:
+            return await run_tool(tool, tool.input.model_validate({**request.query_params, **request.path_params}))
+    elif tool.method == "GET":
         async def endpoint(params: Annotated[tool.input, Query()]) -> dict:
             return await run_tool(tool, params)
     else:

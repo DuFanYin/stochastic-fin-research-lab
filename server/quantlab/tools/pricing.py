@@ -36,8 +36,8 @@ def price_grid(req: PricingBatchGridRequest) -> Result:
 
 def scenario_sweep(req: PricingRequest) -> Result:
     result = engine_task("scenario", req.model_dump())
-    if req.option_type == "put" or req.is_american:
-        result.warnings.append("the scenario sweep prices a European call with Black-Scholes, whatever option_type and is_american say")
+    if req.is_american:
+        result.warnings.append("the scenario sweep prices the European option with Black-Scholes, without early exercise")
     return result
 
 
@@ -150,8 +150,8 @@ TOOLS = [
          "the price and the methods' agreement move with spot and vol. Returns result_details.rows and per-method statistics.",
          PricingBatchGridRequest, price_grid, "/tool/pricing/batch/grid", example={"base": OPTION, "n_jobs": 9}),
     Tool("scenario_sweep", "Scenario sweep",
-         "Reprices a European call with Black-Scholes under five shocks: base, spot +10%, spot −10%, vol +5 points, rate "
-         "+1 point. Use it for a quick sensitivity table. Returns result_details.rows and tornado_points with the change against the base.",
+         "Reprices a European call or put with Black-Scholes under five shocks: base, spot +10%, spot −10%, vol +5 points, "
+         "rate +1 point. Use it for a quick sensitivity table. Returns result_details.rows and tornado_points with the change against the base.",
          PricingRequest, scenario_sweep, "/tool/scenario/run", example=OPTION),
     Tool("pde_price", "Finite-difference price",
          "Prices a European or American option on a finite-difference grid (Crank-Nicolson, implicit or explicit; American "

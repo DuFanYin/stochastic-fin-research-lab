@@ -27,57 +27,14 @@ item below follows the layer rules and the propagation chain described there.
 | One envelope, contract 2.0 | every tool answers in one shape with `warnings`; one contract version shared by the engine and the server, checked when the engine loads |
 | Screener data checks | chain quality (two-sided quotes, spreads, stale marks, missing IVs) with warnings; Heston calibrated to the chain when no parameters are given |
 | Housekeeping | pinned dependencies and a test set; market-data HTTP clients made per event loop; the documents gathered in `doc/` |
+| Run history | every computation kept on the server by run id (SQLite); `get_run` (with rerun), `compare_runs`, `list_runs`; the page's history drawer (load, compare) and a run id on every card; a public server neither lists nor deletes runs |
+| Treasury curve without the wait | fetched at startup and in the background, kept in memory and on disk, its date reported; a request waits only when there is no curve of the last day |
+| Hedging for positions | any legs hedged as a position, each settling at its own expiry; the P&L sign fixed (it was payoff − hedge, so costs looked helpful and ES95 read the wrong tail); paths no longer depend on the thread count; portfolio stress hedges and tree-prices the position |
+| Small fixes | the scenario sweep prices puts and discounts dividends (it priced every option as a call, without the exp(−qT)); unknown arguments rejected; the unused Python copy of the gate's thresholds removed |
 
 ## Next
 
-### 1. Persistence: run history
-
-Every result is lost when the page closes. There is no run history, no comparison across sessions, and no way to reproduce a result
-by its ID.
-
-**Constraints.** SQLite through Python's built-in `sqlite3`, so there is no new dependency and no database process. The database
-lives at `~/.quant-lab/runs.db`, outside the repository. Existing routes do not change.
-
-**Schema.**
-
-```sql
-CREATE TABLE runs (
-    run_id       TEXT PRIMARY KEY,
-    tool_name    TEXT NOT NULL,
-    created_at   TEXT NOT NULL,
-    input_json   TEXT NOT NULL,   -- input_params
-    summary_json TEXT NOT NULL,   -- result_summary
-    details_json TEXT NOT NULL,   -- result_details
-    diag_json    TEXT NOT NULL    -- diagnostics
-);
-CREATE INDEX idx_runs_tool    ON runs(tool_name);
-CREATE INDEX idx_runs_created ON runs(created_at);
-```
-
-**Server.**
-- A new service `run_store.py`:
-  ```python
-  class RunStore:
-      def write(self, record: dict) -> None: ...
-      def list_runs(self, tool_name=None, limit=50) -> list[dict]: ...
-      def get_run(self, run_id: str) -> dict | None: ...
-  ```
-- Every tool's envelope is built in one place, `run_tool` in `server/quantlab/tools/base.py`, and already carries a `run_id`.
-  Writing the row there records every tool, whichever interface called it.
-- A `get_run` tool, so an agent can cite a result by its `run_id` and others can look it up.
-- New routes in `routes/history.py`:
-  - `GET /api/runs?tool=&limit=50`: recent runs, summary only;
-  - `GET /api/runs/{run_id}`: the full record;
-  - `DELETE /api/runs/{run_id}`: remove one run.
-
-**Workbench.**
-- **History drawer**: a collapsible drawer at the bottom of the page, always available. It is not a mode. It shows a table of
-  recent runs with time, tool, key inputs and a headline metric.
-  - Clicking a row loads that result back into the results column.
-  - A Compare toggle shows two runs side by side, with the differences annotated.
-- **Run ID badge**: each result card shows its `run_id` as a badge in the header; clicking the badge copies the ID.
-
-### 2. Agent toolkit: the rest
+### 1. Agent toolkit: the rest
 
 - **Publish the package.** Today it installs from GitHub and builds the engine on the spot. Wheels that need no compiler
   (manylinux, built with cibuildwheel and auditwheel, which also bundles OpenMP's runtime) would let `pip install quantlab`
@@ -85,24 +42,3 @@ CREATE INDEX idx_runs_created ON runs(created_at);
 - **List the public MCP server** in the MCP registries, so agents can find it.
 - **Run the evals regularly.** They need an API key, so they cannot run in the public CI as they are. Record the pass rate per
   model, and add a task whenever an agent gets something wrong in practice.
-
-### 3. Slow Treasury curve
-
-The Treasury yield-curve XML takes about 18 s per request (measured again on 2026-10-09), so the first `/api/market/btc` after
-startup is slow. The curve is cached for an hour after that.
-
-Options:
-- fetch it in the background at startup;
-- switch to a faster Treasury endpoint;
-- serve the fallback curve until the real one arrives.
-
-### 4. Hedging for portfolios
-
-The hedging engine handles one option. In portfolio stress (a request with `legs`), the hedge comparison is skipped and the
-binomial column is left out. Extending delta hedging to a set of legs would give the screener → Risk flow the full stress output.
-
-### 5. Smaller items
-
-- **Scenario sweep for puts.** The engine's sweep prices a European call whatever the request says. The tool warns about it
-  today; it should price the option asked for.
-- **Unused code.** `server/quantlab/services/validation_gate.py` repeats the engine's thresholds and nothing calls it.

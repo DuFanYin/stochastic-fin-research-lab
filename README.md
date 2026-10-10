@@ -34,7 +34,7 @@ your agent: `claude mcp add --transport http quantlab https://dufanyin.dev/lab/m
   from public endpoints. Every source falls back to cached or fixed values when offline.
 - **Fast and reproducible.** The numerics are C++23 with OpenMP, and results are bit-identical whatever the thread count. The
   screener enumerates about two million iron condors in about 12 ms.
-- **Made for agents too.** Each of its 26 tools explains itself: what it computes, its inputs with units, an example. An agent
+- **Made for agents too.** Each of its 30 tools explains itself: what it computes, its inputs with units, an example. An agent
   can use them over MCP or HTTP, or through the Python library and the command line, and every answer says how far to trust it.
 - **One clean pipeline.** All the numerics live in the C++ engine. Python serves it, and the browser only draws, so each layer
   can be read on its own.
@@ -45,10 +45,12 @@ your agent: `claude mcp add --transport http quantlab https://dufanyin.dev/lab/m
 |---|---|
 | **Pricing** | an option priced every way at once, with all five Greeks; Black-Scholes implied vol and Heston calibration; a scenario sweep; Greek surfaces; the implied-vol term structure, smile and surface; a spot × vol batch grid |
 | **Multi-Leg** | straddles, spreads, condors or any legs you enter, priced leg by leg with net Greeks; the strategy type is detected |
-| **Risk** | four stress packs at three severities, with P&L attribution and a robustness summary; four delta-hedging strategies compared on the same paths, and the frontier of hedging cost against tail risk |
+| **Risk** | four stress packs at three severities, for an option or a whole position, with P&L attribution and a robustness summary; the position delta-hedged four ways on the same paths, and the frontier of hedging cost against tail risk |
 | **Numerics** | finite-difference PDE (explicit, implicit, Crank-Nicolson, PSOR for American); lattice convergence; a cross-method benchmark; the change of measure from P to Q |
 | **Screener** | the live Deribit BTC or ETH chain turned into calls, straddles, strangles, iron condors and calendars, ranked by edge against a model vol; one click sends a strategy to Multi-Leg or Risk |
 | **Validation** | moments, Itô's formula on discrete paths, simulation and hedging sanity, and the lattices against closed forms, each against a threshold, with ranked fixes |
+
+Every run is kept: the History button reloads any earlier run, or compares two and shows what changed.
 
 | Screener (dark theme) | Pricing |
 |---|---|
@@ -131,8 +133,9 @@ server/.venv/bin/pip install -r server/requirements-dev.txt
 server/.venv/bin/python -m pytest tests
 ```
 
-There are 71 tests, and they run offline. They cover:
-- the pricing methods and the theory checks;
+There are 81 tests, and they run offline. They cover:
+- the pricing methods, hedging and the theory checks;
+- the run history and the Treasury curve's cache;
 - the screener and its routes, and the option-chain handling;
 - every tool and every way of reaching it (HTTP, MCP, Python, CLI);
 - the agent evals.
@@ -153,8 +156,8 @@ Run the lab yourself for no limits.
 
 ## Roadmap
 
-Next comes run history: results kept and comparable across sessions, and citable by an agent through their run ID. Then
-publishing the package on PyPI, and hedging for whole portfolios. See [doc/ROADMAP.md](doc/ROADMAP.md).
+What is left is getting the toolkit out: publishing the package on PyPI, listing the MCP server where agents look for tools,
+and running the agent evals regularly. See [doc/ROADMAP.md](doc/ROADMAP.md).
 
 ## Repository layout
 

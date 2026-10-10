@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <random>
+#include <array>
 #include <span>
 #include <vector>
 
@@ -165,7 +166,7 @@ void greek_surface_grid (double strike, double rate, double vol, double dividend
 void pricing_error_decomp(double mc, double bs, double binomial,
                           double* out_mc_minus_bs, double* out_binomial_minus_bs);
 void scenario_bs5       (double spot, double strike, double rate, double vol,
-                         double maturity, double dividend_yield, double* out_prices_5);
+                         double maturity, double dividend_yield, bool is_call, double* out_prices_5);
 void pricing_batch      (std::span<const double> spots,
                          std::span<const double> strikes,
                          std::span<const double> rates,
@@ -247,18 +248,43 @@ double vol_surface_interp(std::span<const double> strikes,
 
 // ── Hedging ───────────────────────────────────────────────────────────────────
 
-double delta_hedge_error_estimate(int n_rebalances);
-void   delta_hedge_pnl_distribution(double spot, double strike, double rate, double vol,
-                                    double maturity, int n_rebalances, int n_paths,
-                                    std::span<double> out_stats);
-void   delta_hedge_pnl_histogram   (double spot, double strike, double rate, double vol,
-                                    double maturity, int n_rebalances, int n_paths, int n_bins,
-                                    std::span<double> out_stats,
-                                    std::span<double> out_edges,
-                                    std::span<double> out_counts);
-void   delta_hedge_strategy_compare(double spot, double strike, double rate, double vol,
-                                    double maturity, int n_rebalances, int n_paths,
-                                    double transaction_cost_bps, double rebalance_threshold,
-                                    double vol_mismatch_mult, std::span<double> out_stats_36);
+// One leg of a position to hedge: `quantity` contracts held (negative: sold), priced with Black-Scholes at `vol` on a spot that
+// carries `yield` (the dividend yield, or r - ln(F/S)/T for a leg priced off its own forward F).
+struct HedgeLeg {
+    bool   is_call  = true;
+    double strike   = 0.0;
+    double quantity = 1.0;
+    double vol      = 0.2;
+    double maturity = 1.0;
+    double yield    = 0.0;
+};
+
+// The hedging strategies hedge_position runs, in its order.
+inline constexpr std::array<const char*, 4> kHedgeStrategies = {
+    "discrete_delta", "with_transaction_cost", "threshold_rebalance", "vol_mismatch"};
+
+// What one hedging strategy made on each path: P&L (the hedger's), shares traded, fees paid.
+struct HedgeStrategy {
+    const char* name = "";
+    std::vector<double> pnl, turnover, cost;
+};
+
+// The position taken at its Black-Scholes value and delta-hedged with the underlying, on n_paths paths of a GBM (drift
+// rate - dividend_yield, vol path_vol) over the longest leg, rebalanced n_rebalances times; each leg settles in cash at
+// its expiry. Four strategies on the same paths: discrete delta; with transaction costs; rebalancing only when delta has
+// moved by more than the threshold (with costs); deltas from vol × mismatch (with costs). P&L = payoffs + hedge - the
+// position's cost, so costs lower it. Deterministic whatever the number of threads.
+std::array<HedgeStrategy, 4> hedge_position(double spot, double rate, double dividend_yield, double path_vol,
+                                            std::span<const HedgeLeg> legs, int n_rebalances, int n_paths,
+                                            double transaction_cost_bps, double rebalance_threshold,
+                                            double vol_mismatch_mult);
+
+// A strategy's P&L over its paths: moments and quantiles, mean shares traded and fees, VaR95 and ES95 as positive losses.
+struct PnlStats {
+    double mean = 0.0, std = 0.0, q05 = 0.0, q50 = 0.0, q95 = 0.0;
+    double turnover = 0.0, cost = 0.0, var95 = 0.0, es95 = 0.0;
+};
+PnlStats hedge_stats(const HedgeStrategy& run);
+void pnl_histogram(const std::vector<double>& pnl, int n_bins, std::span<double> out_edges, std::span<double> out_counts);
 
 }  // namespace sf

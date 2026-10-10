@@ -184,9 +184,10 @@ def test_portfolio_stress():
         d = c.post("/api/tool/stress/run", json=req).json()
         single = c.post("/api/tool/stress/run", json={**req, "legs": None, "include_hedge_compare": False}).json()
     s = d["result_summary"]
-    assert s["mode"] == "portfolio" and s["n_legs"] == 2 and s["hedge_compare"] is False
+    assert s["mode"] == "portfolio" and s["n_legs"] == 2 and s["hedge_compare"] is True
     rows = {r["scenario"]: r for r in d["result_details"]["rows"]}
-    assert all(r["binomial"] is None and r["hedge"] == {} for r in rows.values())
+    # the position is priced on a tree too (250 steps a year: within a few percent here), and hedged in every scenario
+    assert all(abs(r["binomial"] - r["bs"]) < 0.03 * r["bs"] and r["hedge"]["es95"] is not None for r in rows.values())
     assert rows["Gap Move"]["bs_shift_vs_base"] > 0          # a long strangle gains on a gap
     assert single["result_summary"]["mode"] == "single_option"
     assert all(r["binomial"] is not None for r in single["result_details"]["rows"])

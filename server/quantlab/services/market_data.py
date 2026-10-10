@@ -18,14 +18,17 @@ import asyncio
 import json
 import logging
 import math
-import os
 import statistics
-import xml.etree.ElementTree as ET  # used in _fetch_rate_curve
+import time
+import xml.etree.ElementTree as ET  # the Treasury's rate feed
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from quantlab import settings
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +52,9 @@ def _http(slow: bool = False) -> httpx.AsyncClient:
 
 
 async def close() -> None:
-    """Closes the clients of the running loop (the server calls it on shutdown)."""
+    """Stops a rate refresh still running and closes the clients of the running loop (the server's shutdown)."""
+    if _rate_task is not None and not _rate_task.done() and _rate_task.get_loop() is asyncio.get_running_loop():
+        _rate_task.cancel()
     if _clients_loop is asyncio.get_running_loop():
         for client in _clients.values():
             await client.aclose()
@@ -132,8 +137,7 @@ _FIXTURE_DIR    = Path(__file__).resolve().parents[1] / "fixtures"
 
 
 def _chain_cache_dir() -> Path:
-    home = Path(os.environ.get("QUANT_LAB_HOME", Path.home() / ".quant-lab"))
-    return home / "chains"
+    return settings.home() / "chains"
 
 
 _CHAIN_MEMO: dict[str, tuple[float, dict]] = {}   # currency -> (monotonic time, chain)
@@ -356,7 +360,6 @@ async def fetch_option_chain(currency: str = "BTC", *, allow_stale: bool = True)
     unreachable and allow_stale is true, falls back to the newest on-disk
     snapshot, then to the bundled fixture; `source` and `fetched_at` say which.
     """
-    import time
     cur = _check_currency(currency)
     memo = _CHAIN_MEMO.get(cur)
     if memo is not None and time.monotonic() - memo[0] < _CHAIN_TTL:
@@ -526,61 +529,125 @@ _TENOR_YEARS = {"1m": 1/12, "3m": 0.25, "6m": 0.5, "1y": 1.0, "2y": 2.0}
 
 _FALLBACK_CURVE = {"1m": 0.043, "3m": 0.045, "6m": 0.046, "1y": 0.047, "2y": 0.047}
 
-_RATE_CURVE_CACHE: dict[str, float] | None = None
-_RATE_CURVE_FETCHED_AT: float = 0.0
-_RATE_CURVE_TTL = 3600.0  # seconds — Treasury data is daily, 1h cache is plenty
+# The Treasury site takes about 18 s to answer (its own processing; the connection is quick), and its data changes once
+# a day. So a curve is kept in memory and on disk ($QUANT_LAB_HOME/rates.json), refreshed in the background, and a caller
+# waits for the site only when there is no curve of the last day at all.
+_RATE_FRESH = 3600.0          # seconds a curve is used as it is
+_RATE_STALE = 24 * 3600.0     # seconds an older curve is still served while a refresh runs
+_RATE_WAIT = 25.0             # seconds a caller waits for the site when no curve is young enough
+
+
+@dataclass
+class _KeptCurve:
+    curve: dict[str, float] | None = None
+    as_of: str | None = None     # the curve's date
+    fetched: float = 0.0         # when it was fetched, wall-clock seconds (so a saved one keeps its age)
+    source: str | None = None    # treasury (fetched by this process) or saved (on disk, from an earlier one)
+
+    def age(self) -> float:
+        return time.time() - self.fetched if self.curve is not None else math.inf
+
+
+_rate = _KeptCurve()
+_rate_task: asyncio.Task | None = None
+
+
+def _rates_file() -> Path:
+    return settings.home() / "rates.json"
+
+
+async def _download_rate_curve() -> tuple[dict[str, float], str | None]:
+    """The latest daily curve from the Treasury's XML feed, and its date."""
+    month = datetime.now(timezone.utc).strftime("%Y%m")
+    url = ("https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml"
+           f"?data=daily_treasury_yield_curve&field_tdr_date_value_month={month}")
+    ns, atom = "http://schemas.microsoft.com/ado/2007/08/dataservices", "http://www.w3.org/2005/Atom"
+    fields = {"BC_1MONTH": "1m", "BC_3MONTH": "3m", "BC_6MONTH": "6m", "BC_1YEAR": "1y", "BC_2YEAR": "2y"}
+    r = await _http(slow=True).get(url)
+    r.raise_for_status()
+    entries = ET.fromstring(r.text).findall(f"{{{atom}}}entry")
+    if not entries:
+        raise ValueError("no XML entries")
+    # the last entry is the latest date; two-step find avoids path namespace issues
+    content = entries[-1].find(f"{{{atom}}}content")
+    props = content.find(f"{{{ns}/metadata}}properties") if content is not None else None
+    if props is None:
+        raise ValueError("no properties element")
+    curve = {tenor: round(float(el.text) / 100.0, 6) for field, tenor in fields.items()
+             if (el := props.find(f"{{{ns}}}{field}")) is not None and el.text}
+    if not curve:
+        raise ValueError("no rates in the latest entry")
+    date = props.find(f"{{{ns}}}NEW_DATE")
+    return {**_FALLBACK_CURVE, **curve}, (date.text[:10] if date is not None and date.text else None)
+
+
+async def refresh_rate_curve() -> None:
+    """Fetches the curve and keeps it (in memory and on disk); on failure keeps what there was."""
+    try:
+        curve, as_of = await _download_rate_curve()
+    except Exception as exc:
+        log.warning("Rate curve failed (%s)", exc)
+        return
+    _rate.curve, _rate.as_of, _rate.fetched, _rate.source = curve, as_of, time.time(), "treasury"
+    try:
+        path = _rates_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"curve": curve, "as_of": as_of, "fetched": _rate.fetched}))
+        tmp.replace(path)
+    except OSError as exc:
+        log.warning("Rate curve write failed (%s)", exc)
+
+
+def _load_saved_curve() -> None:
+    """The curve an earlier fetch saved, when there is none in memory."""
+    if _rate.curve is not None:
+        return
+    try:
+        saved = json.loads(_rates_file().read_text())
+        _rate.curve, _rate.as_of, _rate.fetched, _rate.source = saved["curve"], saved.get("as_of"), float(saved["fetched"]), "saved"
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+
+
+def _refreshing() -> asyncio.Task:
+    """The refresh running in this event loop, started if there is none."""
+    global _rate_task
+    loop = asyncio.get_running_loop()
+    if _rate_task is None or _rate_task.done() or _rate_task.get_loop() is not loop:
+        _rate_task = loop.create_task(refresh_rate_curve())
+    return _rate_task
+
+
+def start_rate_refresh() -> None:
+    """Starts fetching the curve in the background (the server does at startup) unless a fresh one is at hand."""
+    _load_saved_curve()
+    if _rate.age() >= _RATE_FRESH:
+        _refreshing()
 
 
 async def _fetch_rate_curve() -> dict[str, float]:
-    """
-    US Treasury XML yield curve — fetched once per server session (TTL 1h).
-    Treasury data is daily so there is no value in re-fetching on every user refresh.
-    """
-    global _RATE_CURVE_CACHE, _RATE_CURVE_FETCHED_AT
-    import time
-    if _RATE_CURVE_CACHE is not None and (time.monotonic() - _RATE_CURVE_FETCHED_AT) < _RATE_CURVE_TTL:
-        return _RATE_CURVE_CACHE
+    """The US Treasury curve (1m to 2y, decimals): at once from memory or disk when it is less than a day old (refreshed in
+    the background after an hour), else after waiting for the site up to _RATE_WAIT seconds; the fixed fallback when
+    there is nothing at all. rate_curve_info() says which."""
+    _load_saved_curve()
+    if _rate.age() < _RATE_FRESH:
+        return _rate.curve
+    task = _refreshing()
+    if _rate.age() >= _RATE_STALE:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), _RATE_WAIT)
+        except (TimeoutError, asyncio.TimeoutError):
+            pass
+    return _rate.curve if _rate.curve is not None else dict(_FALLBACK_CURVE)
 
-    now = datetime.now(timezone.utc)
-    url = (
-        "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml"
-        f"?data=daily_treasury_yield_curve&field_tdr_date_value_month={now.strftime('%Y%m')}"
-    )
-    _XML_NS = "http://schemas.microsoft.com/ado/2007/08/dataservices"
-    _XML_NS_M = f"{{{_XML_NS}/metadata}}"
-    _FIELD_MAP = {
-        "BC_1MONTH": "1m", "BC_3MONTH": "3m",
-        "BC_6MONTH": "6m", "BC_1YEAR":  "1y", "BC_2YEAR": "2y",
-    }
-    try:
-        r = await _http(slow=True).get(url)
-        r.raise_for_status()
-        root = ET.fromstring(r.text)
-        atom = "http://www.w3.org/2005/Atom"
-        entries = root.findall(f"{{{atom}}}entry")
-        if not entries:
-            raise ValueError("no XML entries")
-        # last entry = most recent date; two-step find avoids path namespace issues
-        content = entries[-1].find(f"{{{atom}}}content")
-        props = content.find(f"{_XML_NS_M}properties") if content is not None else None
-        if props is None:
-            raise ValueError("no properties element")
-        curve: dict[str, float] = {}
-        for field, tenor in _FIELD_MAP.items():
-            el = props.find(f"{{{_XML_NS}}}{field}")
-            if el is not None and el.text:
-                curve[tenor] = float(el.text) / 100.0
-        for t, fb in _FALLBACK_CURVE.items():
-            curve.setdefault(t, fb)
-        _RATE_CURVE_CACHE = curve
-        _RATE_CURVE_FETCHED_AT = time.monotonic()
-        return curve
 
-    except Exception as exc:
-        log.warning("Rate curve failed (%s), using fallback", exc)
-        if _RATE_CURVE_CACHE is not None:
-            return _RATE_CURVE_CACHE
-        return dict(_FALLBACK_CURVE)
+def rate_curve_info() -> dict:
+    """Where the curve _fetch_rate_curve returns comes from (treasury, saved, or fallback: fixed values), its date, and
+    how old the fetch is."""
+    if _rate.curve is None:
+        return {"source": "fallback", "as_of": None, "age_hours": None}
+    return {"source": _rate.source, "as_of": _rate.as_of, "age_hours": round(_rate.age() / 3600, 2)}
 
 
 def pick_rate(curve: dict[str, float], target_years: float) -> tuple[str, float]:

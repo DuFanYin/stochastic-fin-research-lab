@@ -1,4 +1,5 @@
 // Building blocks of the results: cards, key-value lists, tables, run states, notes.
+import { toast } from "./toast.jsx";
 import { fmt, ms } from "../lib/format.js";
 import { results } from "../lib/store.js";
 
@@ -93,8 +94,15 @@ export function Slot({ mode, slot, title, wide, meta, children }) {
   if (!s) return null;
   const engine = s.data?.diagnostics?.compute_ms ?? s.data?.diagnostics?.runtime_ms;
   const warnings = s.state === "ok" ? warningsOf(s.data) : [];
+  const id = s.state === "ok" ? s.data?.run_id : null;
+  const copy = () => navigator.clipboard?.writeText(id).then(() => toast(id, "Run id copied"), () => toast(id, "Run id"));
   return (
-    <Card title={title} wide={wide} meta={meta ?? (s.state === "ok" && engine != null ? <span title="compute time">{ms(engine)}</span> : null)}>
+    <Card title={title} wide={wide} meta={meta ?? (s.state === "ok" && (
+      <>
+        {id && <button type="button" class="font-mono text-2xs hover:text-ink" title={`Run ${id}: click to copy (the API's get_run finds it)`} onClick={copy}>#{id.slice(0, 8)}</button>}
+        {engine != null && <span title="compute time">{ms(engine)}</span>}
+      </>
+    ))}>
       {s.state === "running" ? <Running /> : s.state === "error" ? <ErrorText>{s.error}</ErrorText> : children(s.data)}
       {warnings.length > 0 && (
         <ul class="m-0 flex list-none flex-col gap-1 rounded-sm bg-warn-soft px-2.5 py-2 text-xs text-warn">

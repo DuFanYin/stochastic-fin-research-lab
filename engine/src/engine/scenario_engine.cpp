@@ -10,7 +10,7 @@ namespace sf {
 
 ScenarioResult run_scenario(const ScenarioParams& p) {
     double prices[5] = {0};
-    scenario_bs5(p.spot, p.strike, p.rate, p.vol, p.maturity, p.dividend_yield, prices);
+    scenario_bs5(p.spot, p.strike, p.rate, p.vol, p.maturity, p.dividend_yield, p.option_type != "put", prices);
 
     static const char* names[5] = {"base", "spot_up", "spot_down", "vol_up", "rate_up"};
 

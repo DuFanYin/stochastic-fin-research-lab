@@ -18,7 +18,7 @@ from typing import Any, Awaitable, Callable, Literal
 
 from pydantic import BaseModel
 
-from quantlab.services import engine_client
+from quantlab.services import engine_client, run_store
 from quantlab.version import CONTRACT_VERSION
 
 SIGNIFICANT_DIGITS = 12  # floats in a response keep this many significant digits (drops 0.30000000000000004 noise)
@@ -54,6 +54,7 @@ class Tool:
     cost: Literal["instant", "seconds", "heavy"] = "instant"  # at the defaults
     engine: bool = True      # needs the C++ engine
     network: bool = False    # fetches market data (falls back to cached or fixed data offline)
+    record: bool = True      # kept in the run history (data lookups and the history's own tools are not)
     example: dict = field(default_factory=dict)  # arguments that run it
 
     def schema(self) -> dict:
@@ -97,8 +98,8 @@ def envelope(tool: Tool, params: BaseModel, result: Result, ms: float) -> dict:
 
 
 async def run_tool(tool: Tool, params: BaseModel) -> dict:
-    """Runs a tool on its validated input and returns the envelope. A synchronous tool runs in a worker thread, so a
-    long computation never holds up the event loop."""
+    """Runs a tool on its validated input and returns the envelope, kept in the run history (services/run_store.py).
+    A synchronous tool runs in a worker thread, so a long computation never holds up the event loop."""
     if tool.engine and not engine_client.is_engine_available():
         raise ToolError(engine_client.ENGINE_PROBLEM, 503)
     t0 = perf_counter()
@@ -106,7 +107,10 @@ async def run_tool(tool: Tool, params: BaseModel) -> dict:
         result = await tool.run(params)
     else:
         result = await asyncio.to_thread(tool.run, params)
-    return envelope(tool, params, result, (perf_counter() - t0) * 1000.0)
+    out = envelope(tool, params, result, (perf_counter() - t0) * 1000.0)
+    if tool.record:
+        await asyncio.to_thread(run_store.save_quietly, out)
+    return out
 
 
 def engine_task(task_type: str, payload: dict, trace_prefix: str | None = None) -> Result:

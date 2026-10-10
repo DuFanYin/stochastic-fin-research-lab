@@ -1,7 +1,7 @@
 # Quant Lab for agents
 
 Every computation of the lab is a **tool**: a name, a description written for a model, an input schema with every field
-explained, and one result envelope. The same 26 tools are offered five ways:
+explained, and one result envelope. The same 30 tools (29 on the public lab) are offered five ways:
 - over MCP;
 - over HTTP;
 - as a Python library;
@@ -74,9 +74,10 @@ description and an example call.
 | Numerics | `pde_price`, `lattice_convergence`, `benchmark_methods` |
 | Calibration | `implied_vol`, `implied_vol_batch`, `heston_price`, `calibrate_heston` |
 | Risk | `stress_packs`, `stress_test` (an option or a position), `compare_hedges` |
-| Market | `market_snapshot` (BTC spot, DVOL, rates, funding, IV surface), `option_chain`, `chain_snapshots` |
+| Market | `market_snapshot` (BTC spot, DVOL, rates, funding, IV surface), `iv_surface` (term structure, smiles, skew), `option_chain`, `chain_snapshots` |
 | Screener | `screen_strategies` |
 | Theory and checks | `normal_moments`, `ito_check`, `simulate_path`, `measure_density`, `measure_compare`, `validate` |
+| History | `get_run` (a run by its id; `rerun` runs it again and lists what changed), `compare_runs`, `list_runs` (not on the public lab) |
 
 Units everywhere:
 - rates, vols, yields and drifts are decimals per year (0.05 = 5%);
@@ -96,8 +97,12 @@ Every tool returns one envelope (contract version 2.0):
 | `input_params` | the arguments after validation, with defaults filled in |
 | `run_id`, `created_at`, `tool`, `status`, `contract_version` | identification |
 
+Every result's `run_id` finds it again later with `get_run`, so an agent can cite a number and anyone can check it. The public
+lab keeps runs for 7 days.
+
 Errors come back in two forms:
-- **Bad arguments** come back as a message per field, e.g. `strike: Field required`.
+- **Bad arguments** come back as a message per field, e.g. `strike: Field required`. An argument a tool does not know is an
+  error too, so a misspelt name is never silently ignored.
 - **A request the tool cannot answer** comes back as a message saying what to change, e.g. "select at least one strategy type".
 
 Over MCP both are an `isError` result, so the agent can correct itself.

@@ -21,13 +21,14 @@ import httpx  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from mcp import Client  # noqa: E402
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel, ValidationError  # noqa: E402
 
 import main  # noqa: E402
 import quantlab  # noqa: E402
 from quantlab.mcp import LIST_LIMIT, compact, server  # noqa: E402
 from quantlab.services import engine_client, market_data  # noqa: E402
 from quantlab.tools import TOOLS, ToolError, call  # noqa: E402
+from quantlab.tools.runs import RUN  # noqa: E402
 from quantlab.version import CONTRACT_VERSION  # noqa: E402
 
 ENVELOPE = {"contract_version", "run_id", "tool", "status", "input_params", "result_summary", "result_details",
@@ -67,7 +68,7 @@ def undocumented(model: type[BaseModel], prefix="") -> list[str]:
 
 def test_every_tool_is_documented_for_a_model():
     paths = [(t.method, t.path) for t in TOOLS.values()]
-    assert len(set(paths)) == len(paths) == len(TOOLS) >= 26
+    assert len(set(paths)) == len(paths) == len(TOOLS) >= 29
     for t in TOOLS.values():
         assert t.name.isidentifier() and t.title and len(t.description) >= 80, t.name
         assert undocumented(t.input) == [], (t.name, undocumented(t.input))
@@ -76,8 +77,10 @@ def test_every_tool_is_documented_for_a_model():
 
 
 def test_every_example_runs_and_returns_the_envelope(offline):
-    for t in TOOLS.values():
-        r = asyncio.run(call(t.name, t.example))
+    made = asyncio.run(call("price_option", TOOLS["price_option"].example))["run_id"]
+    for t in TOOLS.values():  # the history's examples stand in for a run: use a real one
+        example = {k: made if v == RUN else v for k, v in t.example.items()}
+        r = asyncio.run(call(t.name, example))
         assert set(r) == ENVELOPE and r["status"] == "ok" and r["tool"] == t.name, t.name
         assert r["contract_version"] == CONTRACT_VERSION
         json.dumps(r, allow_nan=False)  # no NaN or infinity reaches a client
@@ -90,8 +93,12 @@ def test_errors_say_what_is_wrong():
     with pytest.raises(ToolError) as e:
         asyncio.run(call("no_such_tool"))
     assert e.value.status == 404 and "price_option" in e.value.message
-    r = asyncio.run(call("scenario_sweep", {**TOOLS["scenario_sweep"].example, "option_type": "put"}))
-    assert any("call" in w for w in r["warnings"])
+    ex = TOOLS["scenario_sweep"].example
+    assert asyncio.run(call("scenario_sweep", {**ex, "option_type": "put"}))["warnings"] == []
+    assert any("early exercise" in w for w in asyncio.run(call("scenario_sweep", {**ex, "is_american": True}))["warnings"])
+    with pytest.raises(ValidationError) as v:  # a misspelt argument is an error, never silently dropped
+        asyncio.run(call("compare_hedges", {**TOOLS["compare_hedges"].example, "n_path": 10}))
+    assert v.value.errors()[0]["type"] == "extra_forbidden"
 
 
 def test_the_engine_speaks_the_same_contract():

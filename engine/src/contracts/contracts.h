@@ -159,6 +159,8 @@ struct HedgingResult {
     // Run parameters (for display)
     int    n_rebalances = 0;
     int    n_paths      = 0;
+    int    n_legs       = 1;
+    double horizon      = 0.0;   // years: the longest leg
     HistogramData histogram;
     std::vector<StrategyStats> strategies;
     std::string best_strategy;
@@ -200,6 +202,7 @@ struct LegResult {
     double      quantity     = 0.0;   // signed: positive = long, negative = short
     double      bs_price     = 0.0;
     double      mc_price     = 0.0;
+    double      binomial_price = 0.0;  // European CRR tree, 250 steps a year (at least 10)
     double      delta_bs     = 0.0;
     double      vega_bs      = 0.0;
     double      vol          = 0.0;   // effective per-leg inputs
@@ -211,6 +214,7 @@ struct MultiLegResult {
     std::vector<LegResult> legs;
     double net_bs_price  = 0.0;
     double net_mc_price  = 0.0;
+    double net_binomial_price = 0.0;
     double net_delta     = 0.0;
     double net_vega      = 0.0;
     std::string strategy_hint;

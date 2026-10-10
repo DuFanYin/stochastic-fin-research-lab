@@ -16,12 +16,16 @@ OPTION_TYPE = "call or put."
 MC_PATHS = "Monte Carlo paths; the Monte Carlo standard error shrinks like 1/sqrt(paths)."
 
 
-class NoInput(BaseModel):
-    """A tool that takes no input."""
+class Input(BaseModel):
+    """A tool's input: an argument it does not know is an error, so a misspelt name is never silently ignored."""
     model_config = ConfigDict(extra="forbid")
 
 
-class PricingRequest(BaseModel):
+class NoInput(Input):
+    """A tool that takes no input."""
+
+
+class PricingRequest(Input):
     spot: float = Field(..., gt=0, description=SPOT)
     strike: float = Field(..., gt=0, description=STRIKE)
     rate: float = Field(..., ge=-1.0, le=1.0, description=RATE)
@@ -44,18 +48,36 @@ class PricingRequest(BaseModel):
     lsm_steps: int = Field(50, ge=1, le=1000, description="Longstaff-Schwartz exercise dates.")
 
 
-class PricingBatchRequest(BaseModel):
+class PricingBatchRequest(Input):
     jobs: list[PricingRequest] = Field(..., min_length=1, max_length=500, description="Options to price, each priced every way.")
 
 
-class PricingBatchGridRequest(BaseModel):
+class PricingBatchGridRequest(Input):
     """Build a spot/vol shock grid server-side from a single base spec."""
     base: PricingRequest = Field(..., description="The option at the centre of the grid.")
     n_jobs: int = Field(16, ge=1, le=500, description="Points in the grid.")
     spot_shock: float = Field(0.02, ge=0.0, le=1.0, description="Spot step between grid points, as a fraction of spot.")
 
 
-class HedgingRequest(BaseModel):
+class LegSpecRequest(Input):
+    option_type: Literal["call", "put"] = Field("call", description=OPTION_TYPE)
+    strike: float = Field(..., gt=0, description=STRIKE)
+    quantity: float = Field(1.0, ge=-100.0, le=100.0, description="Contracts; negative sells.")
+    # Optional per-leg overrides (e.g. legs handed over from the screener)
+    vol: float | None = Field(None, gt=0, le=5.0, description="This leg's own vol; default the position's.")
+    maturity: float | None = Field(None, gt=0, le=100.0, description="This leg's own time to expiry in years; default the position's.")
+    forward: float | None = Field(None, gt=0, description="This leg's forward: prices it with Black-76 (as for Deribit options).")
+
+    def engine_payload(self) -> dict:
+        leg = {"option_type": self.option_type, "strike": self.strike, "quantity": self.quantity}
+        for key in ("vol", "maturity", "forward"):
+            value = getattr(self, key)
+            if value is not None:
+                leg[key] = value
+        return leg
+
+
+class HedgingRequest(Input):
     spot: float = Field(..., gt=0, description=SPOT)
     strike: float = Field(..., gt=0, description=STRIKE)
     rate: float = Field(..., ge=-1.0, le=1.0, description=RATE)
@@ -66,9 +88,14 @@ class HedgingRequest(BaseModel):
     transaction_cost_bps: float = Field(5.0, ge=0.0, le=1000.0, description="Cost of trading the hedge, in basis points of the traded value.")
     rebalance_threshold: float = Field(0.02, ge=0.0, le=1.0, description="Threshold strategy: rebalance only when delta has moved by more than this.")
     vol_mismatch_mult: float = Field(1.15, ge=0.1, le=5.0, description="Mismatch strategy: hedge with vol × this while the market moves with vol.")
+    dividend_yield: float = Field(0.0, ge=-1.0, le=1.0, description=DIVIDEND)
+    option_type: Literal["call", "put"] = Field("call", description="Without legs: the option sold at strike, a call or a put.")
+    legs: list[LegSpecRequest] | None = Field(None, min_length=1, max_length=10, description=(
+        "A position to hedge instead of one option sold at strike: the legs as held (quantity > 0 bought, < 0 sold), each "
+        "with its own vol, maturity or forward if given."))
 
 
-class SimulationRequest(BaseModel):
+class SimulationRequest(Input):
     model: Literal["brownian", "vasicek"] = Field("brownian", description="brownian (dX = sigma dW) or vasicek (dX = kappa (theta − X) dt + sigma dW).")
     n_steps: int = Field(100, ge=1, le=500_000, description="Time steps.")
     dt: float = Field(0.01, gt=0, le=10.0, description="Length of a step, in years.")
@@ -78,7 +105,7 @@ class SimulationRequest(BaseModel):
     x0: float = Field(0.0, description="Starting value.")
 
 
-class StatsRequest(BaseModel):
+class StatsRequest(Input):
     mu: float = Field(0.0, description="Mean of the normal distribution.")
     sigma: float = Field(1.0, gt=0, le=100.0, description="Standard deviation of the normal distribution.")
     theta: float = Field(1.0, description="Argument of the moment-generating function E[exp(theta X)].")
@@ -88,14 +115,14 @@ class StatsRequest(BaseModel):
 ITO_FUNCTION = "exp_martingale = exp(theta W − theta² t / 2), w2_minus_t = W² − t, or w3 = W³."
 
 
-class ItoCheckRequest(BaseModel):
+class ItoCheckRequest(Input):
     function_type: Literal["exp_martingale", "w2_minus_t", "w3"] = Field("exp_martingale", description=ITO_FUNCTION)
     theta: float = Field(0.7, description="theta of the exponential martingale.")
     t: float = Field(1.0, gt=0, le=100.0, description="Horizon, in years.")
     n_steps: int = Field(2000, ge=100, le=2_000_000, description="Steps of the discrete paths Itô's formula is checked on.")
 
 
-class MeasureChangeRequest(BaseModel):
+class MeasureChangeRequest(Input):
     mu: float = Field(0.08, description="Drift under the physical measure P, decimal per year.")
     r: float = Field(0.02, description="Risk-free rate, the drift under the risk-neutral measure Q.")
     sigma: float = Field(0.2, gt=0, le=5.0, description=VOL)
@@ -103,7 +130,7 @@ class MeasureChangeRequest(BaseModel):
     n_steps: int = Field(200, ge=20, le=2_000_000, description="Steps of the density path.")
 
 
-class MeasureCompareRequest(BaseModel):
+class MeasureCompareRequest(Input):
     mu: float = Field(0.08, description="Drift under the physical measure P, decimal per year.")
     r: float = Field(0.02, description="Risk-free rate, the drift under the risk-neutral measure Q.")
     sigma: float = Field(0.2, gt=0, le=5.0, description=VOL)
@@ -113,7 +140,7 @@ class MeasureCompareRequest(BaseModel):
     x0: float = Field(1.0, description="Starting value of the price.")
 
 
-class PdeRequest(BaseModel):
+class PdeRequest(Input):
     spot: float = Field(..., gt=0, description=SPOT)
     strike: float = Field(..., gt=0, description=STRIKE)
     rate: float = Field(..., ge=-1.0, le=1.0, description=RATE)
@@ -130,7 +157,7 @@ class PdeRequest(BaseModel):
 LADDER = "Lattice step counts to price at, ascending."
 
 
-class ConvergenceRequest(BaseModel):
+class ConvergenceRequest(Input):
     spot: float = Field(..., gt=0, description=SPOT)
     strike: float = Field(..., gt=0, description=STRIKE)
     rate: float = Field(..., ge=-1.0, le=1.0, description=RATE)
@@ -141,7 +168,7 @@ class ConvergenceRequest(BaseModel):
     option_type: Literal["call", "put"] = Field("call", description=OPTION_TYPE)
 
 
-class BenchmarkRequest(BaseModel):
+class BenchmarkRequest(Input):
     pricing: PricingRequest = Field(..., description="The option to price with every method.")
     pde_method: Literal["crank_nicolson", "implicit", "explicit"] = Field("crank_nicolson", description="Finite-difference scheme.")
     pde_s_steps: int = Field(160, ge=40, le=2000, description="Finite-difference grid points in price.")
@@ -149,7 +176,7 @@ class BenchmarkRequest(BaseModel):
     benchmark_baseline: Literal["pde", "bs", "mc", "binomial", "trinomial"] = Field("pde", description="The method the others are measured against.")
 
 
-class ValidationGateRequest(BaseModel):
+class ValidationGateRequest(Input):
     pick_stats: bool = Field(False, description="Check sample moments against the normal distribution.")
     pick_ito: bool = Field(False, description="Check E[f(W_t)] and Itô's formula on discrete paths.")
     pick_simulation: bool = Field(False, description="Check that a simulated path stays finite and the delta-hedge P&L spread is sane.")
@@ -199,7 +226,7 @@ class ValidationGateRequest(BaseModel):
 GREEK = "delta, gamma, vega, theta or rho (Black-Scholes)."
 
 
-class GreekSurfaceRequest(BaseModel):
+class GreekSurfaceRequest(Input):
     strike: float = Field(..., gt=0, description=STRIKE)
     rate: float = Field(..., ge=-1.0, le=1.0, description=RATE)
     vol: float = Field(..., gt=0, le=5.0, description=VOL)
@@ -213,7 +240,7 @@ class GreekSurfaceRequest(BaseModel):
     greek: Literal["delta", "gamma", "vega", "theta", "rho"] = Field("delta", description=GREEK)
 
 
-class ImpliedVolRequest(BaseModel):
+class ImpliedVolRequest(Input):
     market_price: float = Field(..., gt=0, description="Observed price of a European call, in the units of spot.")
     spot: float = Field(..., gt=0, description=SPOT)
     strike: float = Field(..., gt=0, description=STRIKE)
@@ -222,7 +249,7 @@ class ImpliedVolRequest(BaseModel):
     dividend_yield: float = Field(0.0, ge=-1.0, le=1.0, description=DIVIDEND)
 
 
-class ImpliedVolBatchRequest(BaseModel):
+class ImpliedVolBatchRequest(Input):
     market_prices: list[float] = Field(..., min_length=1, max_length=500, description="Observed European call prices.")
     strikes: list[float] = Field(..., min_length=1, max_length=500, description="Their strikes, in the same order.")
     expiries: list[float] = Field(..., min_length=1, max_length=500, description="Their times to expiry in years, in the same order.")
@@ -236,7 +263,7 @@ V0, KAPPA, THETA, XI, RHO = ("Heston: initial variance (vol², 0.04 = 20% vol)."
                              "Heston: correlation between the price and its variance.")
 
 
-class HestonPriceRequest(BaseModel):
+class HestonPriceRequest(Input):
     spot: float = Field(..., gt=0, description=SPOT)
     strike: float = Field(..., gt=0, description=STRIKE)
     rate: float = Field(..., ge=-1.0, le=1.0, description=RATE)
@@ -248,7 +275,7 @@ class HestonPriceRequest(BaseModel):
     rho: float = Field(-0.7, ge=-1.0, le=1.0, description=RHO)
 
 
-class HestonCalibrateRequest(BaseModel):
+class HestonCalibrateRequest(Input):
     spot: float = Field(..., gt=0, description=SPOT)
     rate: float = Field(..., ge=-1.0, le=1.0, description=RATE)
     dividend_yield: float = Field(0.0, ge=-1.0, le=1.0, description=DIVIDEND)
@@ -263,25 +290,7 @@ class HestonCalibrateRequest(BaseModel):
     max_iter: int = Field(500, ge=50, le=5000, description="Nelder-Mead iterations at most.")
 
 
-class LegSpecRequest(BaseModel):
-    option_type: Literal["call", "put"] = Field("call", description=OPTION_TYPE)
-    strike: float = Field(..., gt=0, description=STRIKE)
-    quantity: float = Field(1.0, ge=-100.0, le=100.0, description="Contracts; negative sells.")
-    # Optional per-leg overrides (e.g. legs handed over from the screener)
-    vol: float | None = Field(None, gt=0, le=5.0, description="This leg's own vol; default the position's.")
-    maturity: float | None = Field(None, gt=0, le=100.0, description="This leg's own time to expiry in years; default the position's.")
-    forward: float | None = Field(None, gt=0, description="This leg's forward: prices it with Black-76 (as for Deribit options).")
-
-    def engine_payload(self) -> dict:
-        leg = {"option_type": self.option_type, "strike": self.strike, "quantity": self.quantity}
-        for key in ("vol", "maturity", "forward"):
-            value = getattr(self, key)
-            if value is not None:
-                leg[key] = value
-        return leg
-
-
-class MultiLegRequest(BaseModel):
+class MultiLegRequest(Input):
     spot: float = Field(..., gt=0, description=SPOT)
     rate: float = Field(..., ge=-1.0, le=1.0, description=RATE)
     vol: float = Field(..., gt=0, le=5.0, description="Vol of every leg without its own.")
@@ -291,7 +300,7 @@ class MultiLegRequest(BaseModel):
     legs: list[LegSpecRequest] = Field(..., min_length=1, max_length=10, description="The position's legs.")
 
 
-class StressLibraryRequest(BaseModel):
+class StressLibraryRequest(Input):
     spot: float = Field(..., gt=0, description=SPOT)
     strike: float = Field(..., gt=0, description=STRIKE + " Ignored when legs are given.")
     rate: float = Field(..., ge=-1.0, le=1.0, description=RATE)
@@ -304,9 +313,10 @@ class StressLibraryRequest(BaseModel):
     transaction_cost_bps: float = Field(5.0, ge=0.0, le=1000.0, description="Hedge comparison: trading cost, basis points.")
     rebalance_threshold: float = Field(0.02, ge=0.0, le=1.0, description="Hedge comparison: delta move that triggers the threshold strategy.")
     vol_mismatch_mult: float = Field(1.15, ge=0.1, le=5.0, description="Hedge comparison: the mismatch strategy hedges with vol × this.")
+    option_type: Literal["call", "put"] = Field("call", description="The single option's type (ignored when legs are given).")
     stress_pack: str = Field("core4", description="Scenario pack: core4, vol_first, rates_first or crash_kit (the stress_packs tool lists them).")
     stress_severity: Literal["mild", "moderate", "severe"] = Field("moderate", description="Shock size: mild 0.7×, moderate 1×, severe 1.5×.")
-    include_hedge_compare: bool = Field(True, description="Also run the delta-hedging comparison in every scenario (single option only).")
+    include_hedge_compare: bool = Field(True, description="Also run the delta-hedging comparison in every scenario.")
     # Portfolio mode: when legs are given, every scenario reprices the whole
     # multi-leg position instead of a single option at `strike`.
     legs: list[LegSpecRequest] | None = Field(None, min_length=1, max_length=10, description="A position to stress instead of one option at strike.")
@@ -319,7 +329,7 @@ CURRENCY = "BTC or ETH: the Deribit option chain to use."
 Currency = Annotated[Literal["BTC", "ETH"], BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v)]
 
 
-class ScreenerStrategies(BaseModel):
+class ScreenerStrategies(Input):
     single_calls: bool = Field(False, description="Single out-of-the-money calls.")
     iron_condors: bool = Field(False, description="Iron condors (SHORT direction: reverse iron condors).")
     straddles: bool = Field(False, description="Straddles: a call and a put at one strike.")
@@ -327,7 +337,7 @@ class ScreenerStrategies(BaseModel):
     forward_vols: bool = Field(False, description="Same-strike calendars, ranked by the forward vol between their expiries.")
 
 
-class ScreenerOptionFilter(BaseModel):
+class ScreenerOptionFilter(Input):
     min_volume: float | None = Field(None, ge=0, description="Least traded volume, in coins.")
     min_oi: float | None = Field(None, ge=0, description="Least open interest, in coins.")
     min_price: float | None = Field(None, ge=0, description="Least option price, USD.")
@@ -343,7 +353,7 @@ class ScreenerOptionFilter(BaseModel):
 RANGE = "[least, most]; null leaves an end open."
 
 
-class ScreenerStrategyFilter(BaseModel):
+class ScreenerStrategyFilter(Input):
     direction: Literal["LONG", "SHORT"] = Field("LONG", description="LONG buys the strategy, SHORT sells it.")
     debit_range: Range = Field(None, description="Net debit paid, USD: " + RANGE)
     credit_range: Range = Field(None, description="Net credit received, USD: " + RANGE)
@@ -358,7 +368,7 @@ class ScreenerStrategyFilter(BaseModel):
     edge_range: Range = Field(None, description="Edge = model value − cost, USD: " + RANGE)
 
 
-class ScreenerHeston(BaseModel):
+class ScreenerHeston(Input):
     v0: float = Field(..., gt=0, description=V0)
     kappa: float = Field(..., gt=0, description=KAPPA)
     theta: float = Field(..., gt=0, description=THETA)
@@ -366,13 +376,13 @@ class ScreenerHeston(BaseModel):
     rho: float = Field(..., ge=-1.0, le=1.0, description=RHO)
 
 
-class ScreenerRank(BaseModel):
+class ScreenerRank(Input):
     key: Literal["rr", "gain", "loss", "cost", "credit", "edge", "forward_vol"] = Field("rr", description="What to rank by.")
     descending: bool | None = Field(None, description="Rank order; null uses the key's natural order (best first).")
     top_n: int = Field(20, ge=1, le=500, description="Strategies to return.")
 
 
-class ScreenerRequest(BaseModel):
+class ScreenerRequest(Input):
     currency: Currency = Field("BTC", description=CURRENCY)
     snapshot_id: str | None = Field(None, description="A cached chain (chain_snapshots lists them) instead of the live one.")
     strategies: ScreenerStrategies = Field(..., description="Which strategy types to build; at least one.")
@@ -389,11 +399,41 @@ class ScreenerRequest(BaseModel):
     rank: ScreenerRank = Field(ScreenerRank(), description="Ranking and how many to return.")
 
 
-class ChainRequest(BaseModel):
+class ChainRequest(Input):
     currency: Currency = Field("BTC", description=CURRENCY)
     max_days: float | None = Field(None, gt=0, description="Only expiries within this many days.")
     snapshot_id: str | None = Field(None, description="A cached chain (chain_snapshots lists them) instead of the live one.")
 
 
-class SnapshotsRequest(BaseModel):
+class SnapshotsRequest(Input):
     currency: Currency | None = Field(None, description="Only this currency's snapshots.")
+
+
+class IvSurfaceRequest(Input):
+    spot: float = Field(..., gt=0, description="BTC spot, USD: the centre of the moneyness grid.")
+    strike: float = Field(..., gt=0, description="The strike to interpolate the implied vol at.")
+    maturity: float = Field(..., gt=0, description="The time to expiry in years to interpolate at, and to centre the grid's maturities on.")
+    smile_points: int = Field(17, ge=5, le=21, description="Strikes in the smile of the expiry nearest maturity.")
+    moneyness_steps: int = Field(15, ge=5, le=21, description="Grid points from 75% to 125% of spot.")
+    tenor_steps: int = Field(11, ge=5, le=21, description="Grid points from 0.4× to 1.8× maturity.")
+    burst_lower_quantile: float = Field(0.10, ge=0.0, le=0.49, description="Grid IVs at or below this quantile are marked suppressed.")
+    burst_upper_quantile: float = Field(0.90, ge=0.51, le=1.0, description="Grid IVs at or above this quantile are marked burst.")
+
+
+RUN_ID = "A run's id: the run_id of a result."
+
+
+class GetRunRequest(Input):
+    run_id: str = Field(..., min_length=8, max_length=64, description=RUN_ID)
+    rerun: bool = Field(False, description="Also run it again with the same inputs and list what changed (market data may have moved).")
+
+
+class CompareRunsRequest(Input):
+    run_a: str = Field(..., min_length=8, max_length=64, description=RUN_ID + " The first.")
+    run_b: str = Field(..., min_length=8, max_length=64, description=RUN_ID + " The second.")
+
+
+class ListRunsRequest(Input):
+    tool: str | None = Field(None, description="Only runs of this tool.")
+    limit: int = Field(20, ge=1, le=200, description="Runs to list, newest first.")
+

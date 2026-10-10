@@ -3,6 +3,7 @@ MCP at /mcp, /llms.txt, and the workbench page at /."""
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import Body, FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
@@ -10,10 +11,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from starlette.routing import Route
 
-from quantlab import llms
+from quantlab import llms, settings
 from quantlab.api.router import router
 from quantlab.mcp import HttpEndpoint
-from quantlab.services import engine_client, market_data
+from quantlab.services import engine_client, market_data, run_store
 from quantlab.tools import TOOLS, Tool, ToolError, call
 from quantlab.version import CONTRACT_VERSION, __version__
 
@@ -22,6 +23,7 @@ mcp_endpoint = HttpEndpoint()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    market_data.start_rate_refresh()  # the Treasury takes ~18 s: start at once, so the first visitor need not wait
     async with mcp_endpoint.running():
         yield
     await market_data.close()
@@ -35,6 +37,11 @@ app = FastAPI(title="Quant Lab", version=__version__, lifespan=lifespan,
 @app.exception_handler(ToolError)
 async def tool_error(_: Request, exc: ToolError) -> JSONResponse:
     return JSONResponse({"detail": exc.message}, status_code=exc.status)
+
+
+@app.exception_handler(ValidationError)
+async def invalid_arguments(_: Request, exc: ValidationError) -> JSONResponse:
+    return JSONResponse({"detail": exc.errors(include_url=False, include_context=False)}, status_code=422)
 
 
 app.include_router(router, prefix="/api")
@@ -58,12 +65,19 @@ def list_tools() -> dict:
 
 
 @app.post("/api/tools/{name}", tags=["tools"])
-async def call_tool(name: str, arguments: dict = Body(default_factory=dict)) -> dict:
+async def call_tool(name: str, arguments: Annotated[dict, Body(default_factory=dict)]) -> dict:
     """Runs one tool by name; the body is its arguments."""
-    try:
-        return await call(name, arguments)
-    except ValidationError as exc:
-        return JSONResponse({"detail": exc.errors(include_url=False, include_context=False)}, status_code=422)
+    return await call(name, arguments)
+
+
+@app.delete("/api/runs/{run_id}", tags=["tools"])
+def delete_run(run_id: str) -> dict:
+    """Removes a run from the history (not on a public server, where a run is found only by its id)."""
+    if settings.public():
+        raise ToolError("runs cannot be deleted on a public server", 403)
+    if not run_store.store().delete(run_id):
+        raise ToolError(f"no run {run_id}", 404)
+    return {"deleted": run_id}
 
 
 @app.get("/llms.txt", response_class=PlainTextResponse)

@@ -79,17 +79,20 @@ void pricing_error_decomp(
 
 void scenario_bs5(
     double spot, double strike, double rate, double vol,
-    double maturity, double dividend_yield, double* out_prices_5
+    double maturity, double dividend_yield, bool is_call, double* out_prices_5
 ) {
     if (!out_prices_5) return;
     const double shock_spot[5]  = {1.0, 1.1, 0.9, 1.0, 1.0};
     const double shock_vol[5]   = {0.0, 0.0, 0.0, 0.05, 0.0};
     const double shock_rate[5]  = {0.0, 0.0, 0.0, 0.0, 0.01};
+    // Priced at r - q for the forward, then discounted by exp(-qT) (as in pricing): at r - q alone the price is
+    // exp(qT) too high.
+    const double q_disc = std::exp(-dividend_yield * maturity);
     for (int i = 0; i < 5; ++i) {
         const double s    = spot * shock_spot[i];
         const double v    = std::max(0.0001, vol + shock_vol[i]);
         const double r_eff = rate + shock_rate[i] - dividend_yield;
-        out_prices_5[i] = bs_closed_form_price(s, strike, r_eff, v, maturity);
+        out_prices_5[i] = q_disc * bs_closed_form_price(s, strike, r_eff, v, maturity, is_call);
     }
 }
 

@@ -141,19 +141,40 @@ BatchGridParams parse_batch_grid_params(const json& j) {
     };
 }
 
+std::vector<LegSpec> parse_legs(const json& j, double default_strike) {
+    std::vector<LegSpec> legs;
+    if (!j.contains("legs") || !j["legs"].is_array()) return legs;
+    for (const auto& leg : j["legs"]) {
+        LegSpec ls;
+        ls.option_type = jv<std::string>(leg, "option_type", "call");
+        ls.strike      = jv<double>(leg, "strike", default_strike);
+        ls.quantity    = jv<double>(leg, "quantity", 1.0);
+        ls.vol         = jv<double>(leg, "vol", 0.0);
+        ls.maturity    = jv<double>(leg, "maturity", 0.0);
+        ls.forward     = jv<double>(leg, "forward", 0.0);
+        legs.push_back(ls);
+    }
+    return legs;
+}
+
 HedgingParams parse_hedging_params(const json& j) {
     return HedgingParams{
-        jv<double>(j, "spot", 0.0), jv<double>(j, "strike", 0.0), jv<double>(j, "rate", 0.0),
-        jv<double>(j, "vol", 0.0), jv<double>(j, "maturity", 0.0), jv<int>(j, "n_rebalances", 52),
-        jv<int>(j, "n_paths", 2000), jv<int>(j, "n_bins", 40), jv<double>(j, "transaction_cost_bps", 5.0),
-        jv<double>(j, "rebalance_threshold", 0.02), jv<double>(j, "vol_mismatch_mult", 1.15)
+        .spot = jv<double>(j, "spot", 0.0), .strike = jv<double>(j, "strike", 0.0), .rate = jv<double>(j, "rate", 0.0),
+        .vol = jv<double>(j, "vol", 0.0), .maturity = jv<double>(j, "maturity", 0.0),
+        .n_rebalances = jv<int>(j, "n_rebalances", 52), .n_paths = jv<int>(j, "n_paths", 2000), .n_bins = jv<int>(j, "n_bins", 40),
+        .transaction_cost_bps = jv<double>(j, "transaction_cost_bps", 5.0),
+        .rebalance_threshold = jv<double>(j, "rebalance_threshold", 0.02),
+        .vol_mismatch_mult = jv<double>(j, "vol_mismatch_mult", 1.15),
+        .dividend_yield = jv<double>(j, "dividend_yield", 0.0), .option_type = jv<std::string>(j, "option_type", "call"),
+        .legs = parse_legs(j, jv<double>(j, "spot", 0.0)),
     };
 }
 
 ScenarioParams parse_scenario_params(const json& j) {
     return ScenarioParams{
         jv<double>(j, "spot", 0.0), jv<double>(j, "strike", 0.0), jv<double>(j, "rate", 0.0),
-        jv<double>(j, "vol", 0.0), jv<double>(j, "maturity", 0.0), jv<double>(j, "dividend_yield", 0.0)
+        jv<double>(j, "vol", 0.0), jv<double>(j, "maturity", 0.0), jv<double>(j, "dividend_yield", 0.0),
+        jv<std::string>(j, "option_type", "call")
     };
 }
 
@@ -323,6 +344,7 @@ std::string ser_hedging(const std::string& tid, const HedgingResult& r, double m
         {"left_tail",r.left_tail},{"right_tail",r.right_tail},
         {"tail_skew_proxy",r.tail_skew_proxy},{"tail_ratio_q95_q05",r.tail_ratio_q95_q05},
         {"scaling_proxy_std_sqrt_n",r.scaling_proxy_std_sqrt_n},{"best_strategy",r.best_strategy},
+        {"n_legs",r.n_legs},{"horizon",r.horizon},
     };
     json details = {
         {"histogram",{{"edges",r.histogram.edges},{"counts",r.histogram.counts}}},
@@ -558,25 +580,14 @@ std::string run_multi_leg_json(const std::string& src, double t0_ms) {
     p.maturity       = jv<double>(j, "maturity",       1.0);
     p.dividend_yield = jv<double>(j, "dividend_yield", 0.0);
     p.n_paths        = jv<int>   (j, "n_paths",        10000);
-    if (j.contains("legs") && j["legs"].is_array()) {
-        for (const auto& leg : j["legs"]) {
-            LegSpec ls;
-            ls.option_type = jv<std::string>(leg, "option_type", "call");
-            ls.strike      = jv<double>(leg, "strike", p.spot);
-            ls.quantity    = jv<double>(leg, "quantity", 1.0);
-            ls.vol         = jv<double>(leg, "vol", 0.0);
-            ls.maturity    = jv<double>(leg, "maturity", 0.0);
-            ls.forward     = jv<double>(leg, "forward", 0.0);
-            p.legs.push_back(ls);
-        }
-    }
+    p.legs = parse_legs(j, p.spot);
     if (p.legs.empty()) return err_response(ctx->trace_id, "legs_array_empty");
     const auto r = run_multi_leg(p);
     json legs_arr = json::array();
     for (const auto& lr : r.legs) {
         legs_arr.push_back({
             {"option_type", lr.option_type}, {"strike", lr.strike}, {"quantity", lr.quantity},
-            {"bs_price", lr.bs_price}, {"mc_price", lr.mc_price},
+            {"bs_price", lr.bs_price}, {"mc_price", lr.mc_price}, {"binomial_price", lr.binomial_price},
             {"delta_bs", lr.delta_bs}, {"vega_bs", lr.vega_bs},
             {"vol", lr.vol}, {"maturity", lr.maturity}, {"forward", lr.forward},
         });
@@ -585,6 +596,7 @@ std::string run_multi_leg_json(const std::string& src, double t0_ms) {
     jj["result_summary"] = {
         {"net_bs_price",  r.net_bs_price},
         {"net_mc_price",  r.net_mc_price},
+        {"net_binomial_price", r.net_binomial_price},
         {"net_delta",     r.net_delta},
         {"net_vega",      r.net_vega},
         {"strategy_hint", r.strategy_hint},

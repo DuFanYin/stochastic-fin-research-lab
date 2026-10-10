@@ -13,6 +13,7 @@ pydantic.ValidationError.
 """
 
 import asyncio
+import importlib.util
 import inspect
 
 from quantlab.version import CONTRACT_VERSION, __version__
@@ -77,7 +78,11 @@ def _tool_function(name: str):
 
 
 def __getattr__(name: str):
-    if not name.startswith("_") and name in _registry():
+    # A submodule (quantlab.settings, ...) is left to the import system: looking it up in the registry would import the
+    # tools, which import the submodule.
+    if name.startswith("_") or importlib.util.find_spec(f"{__name__}.{name}") is not None:
+        raise AttributeError(f"module 'quantlab' has no attribute {name!r}")
+    if name in _registry():
         return _tool_function(name)
     if name == "ToolError":
         from quantlab.tools import ToolError

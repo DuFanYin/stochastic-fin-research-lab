@@ -39,6 +39,7 @@ def stress_test(req: StressLibraryRequest) -> Result:
             stress_pack=req.stress_pack, stress_severity=req.stress_severity,
             include_hedge_compare=req.include_hedge_compare,
             legs=[leg.engine_payload() for leg in req.legs] if req.legs else None,
+            option_type=req.option_type,
         )
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
@@ -53,7 +54,7 @@ TOOLS = [
     Tool("stress_test", "Stress an option or a position",
          "Reprices one option, or a position of legs, under every scenario of a stress pack (core4, vol_first, rates_first, "
          "crash_kit) at a severity, with Black-Scholes, Monte Carlo and binomial, splits each P&L into spot, vol and rate, "
-         "and (single option) reruns the hedge comparison in each scenario. Use it to find what hurts a position most. "
+         "and reruns the hedge comparison in each scenario (compare_hedges, on the shocked option or position). Use it to find what hurts a position most. "
          "Returns result_summary (worst_scenario, worst_mc_shift, robustness, key driver, the cross-scenario summary) and "
          "result_details (per-scenario rows, attribution, rankings).",
          StressLibraryRequest, stress_test, "/tool/stress/run", cost="seconds",

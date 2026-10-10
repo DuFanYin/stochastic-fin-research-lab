@@ -3,6 +3,7 @@
 import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 import { budget } from "./lib/api.js";
+import { record, restored } from "./lib/history.js";
 import { ms } from "./lib/format.js";
 import { fetchLive, market } from "./lib/live.js";
 import { anyCheck } from "./lib/payloads.js";
@@ -13,6 +14,7 @@ import { handOff } from "./modes/screener.jsx";
 import { Report, gate } from "./modes/validation.jsx";
 import { Slot } from "./ui/blocks.jsx";
 import { Segmented } from "./ui/controls.jsx";
+import { HistoryDrawer } from "./ui/history.jsx";
 import { Toasts, toast } from "./ui/toast.jsx";
 
 const busy = signal(false);
@@ -38,6 +40,7 @@ async function run(mode = current()) {
     toast(err?.message ?? String(err), `${mode.label} failed`);
   } finally {
     end(mode.id);
+    record(mode.id);
     busy.value = false;
   }
 }
@@ -175,7 +178,9 @@ function ResultsPane() {
       <div class="mb-3 flex min-h-8 items-center justify-between gap-3">
         <h2 class="text-lg font-semibold tracking-tight">{mode.label}</h2>
         <div class="flex items-center gap-3">
-          <span class="text-xs text-muted">{r?.running ? "running…" : r?.wall != null ? `last run ${ms(r.wall)} wall` : ""}</span>
+          <span class="text-xs text-muted">{r?.running ? "running…" : restored.value?.mode === mode.id
+            ? `from the history: ${new Date(restored.value.at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`
+            : r?.wall != null ? `last run ${ms(r.wall)} wall` : ""}</span>
           {budget.value != null && (
             <span class={`hidden text-xs sm:inline ${budget.value < 20 ? "text-warn" : "text-muted"}`}
               title="The public lab gives each visitor 120 s of computing time, refilled over 10 minutes. Run it yourself for no limits.">
@@ -218,6 +223,7 @@ export function App() {
         <Sidebar />
         <ResultsPane />
       </div>
+      <HistoryDrawer modes={byId} />
       <Toasts />
     </>
   );

@@ -88,13 +88,11 @@ ValidationResult run_validation(const ValidationParams& p) {
             rows.push_back(r);
         }
 
-        // Hedging normalized std check
-        double hstats[5] = {0};
-        std::vector<double> edges(41, 0.0), counts(40, 0.0);
-        delta_hedge_pnl_histogram(p.spot, p.strike, p.rate, p.vol, p.maturity,
-                                  p.n_rebalances, p.hedge_paths, 40,
-                                  hstats, edges, counts);
-        const double norm_std = hstats[1] / std::max(p.spot, 1e-12);
+        // Hedging normalized std check: one call sold, discrete delta hedging
+        const HedgeLeg call{true, p.strike, -1.0, p.vol, p.maturity, 0.0};
+        const auto runs = hedge_position(p.spot, p.rate, 0.0, p.vol, std::span(&call, 1),
+                                         p.n_rebalances, p.hedge_paths, 0.0, 0.0, 1.0);
+        const double norm_std = hedge_stats(runs.front()).std / std::max(p.spot, 1e-12);
         rows.push_back(make_row("hedging", "normalized_std", norm_std, T_NORM_STD, norm_std <= T_NORM_STD,
             "hedging distribution spread", "increase rebalances or reduce vol/maturity"));
     }

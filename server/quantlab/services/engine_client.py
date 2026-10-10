@@ -1,6 +1,6 @@
 import json
 import os
-from ctypes import CDLL, POINTER, byref, c_char, c_char_p, c_double, c_int, create_string_buffer
+from ctypes import CDLL, POINTER, byref, c_char, c_char_p, c_int, create_string_buffer
 from pathlib import Path
 
 from quantlab.version import CONTRACT_VERSION
@@ -463,13 +463,14 @@ def multi_leg(
         "dividend_yield": dividend_yield, "n_paths": n_paths, "legs": legs,
     })
     if r.get("status") == "error":
-        return {"net_bs_price": 0.0, "net_mc_price": 0.0, "net_delta": 0.0,
+        return {"net_bs_price": 0.0, "net_mc_price": 0.0, "net_binomial_price": 0.0, "net_delta": 0.0,
                 "net_vega": 0.0, "strategy_hint": "error", "legs": []}
     s  = r.get("result_summary", {})
     rd = r.get("result_details", {})
     return {
         "net_bs_price":  s.get("net_bs_price",  0.0),
         "net_mc_price":  s.get("net_mc_price",  0.0),
+        "net_binomial_price": s.get("net_binomial_price", 0.0),
         "net_delta":     s.get("net_delta",     0.0),
         "net_vega":      s.get("net_vega",      0.0),
         "strategy_hint": s.get("strategy_hint", ""),

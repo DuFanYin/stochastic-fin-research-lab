@@ -83,6 +83,7 @@ struct ScenarioParams {
     double vol            = 0.0;
     double maturity       = 0.0;
     double dividend_yield = 0.0;
+    std::string option_type = "call";
 };
 
 ScenarioResult run_scenario(const ScenarioParams& p);
@@ -101,6 +102,9 @@ struct HedgingParams {
     double transaction_cost_bps  = 5.0;
     double rebalance_threshold   = 0.02;
     double vol_mismatch_mult     = 1.15;
+    double dividend_yield        = 0.0;
+    std::string option_type      = "call";   // without legs: one such option sold at strike
+    std::vector<LegSpec> legs;               // a position to hedge instead
 };
 
 HedgingResult run_hedging(const HedgingParams& p);

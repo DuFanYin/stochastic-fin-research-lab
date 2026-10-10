@@ -116,6 +116,7 @@ def run_stress_library(
     stress_severity: str,
     include_hedge_compare: bool,
     legs: list[dict[str, Any]] | None = None,
+    option_type: str = "call",
 ) -> dict[str, Any]:
     """
     Reprice under each scenario of a stress pack.
@@ -124,35 +125,35 @@ def run_stress_library(
     binomial, plus an optional delta-hedge comparison per scenario.
 
     Portfolio mode (legs given, multi-leg contract): the whole position is
-    repriced via the multi-leg engine. The spot shock also scales each leg's
-    `forward`, the vol shock scales each leg's own `vol`. The hedging engine
-    covers single options only, so the hedge comparison is skipped and there is
-    no binomial column.
+    repriced via the multi-leg engine (Black-Scholes, Monte Carlo and a binomial
+    tree per leg). The spot shock also scales each leg's `forward`, the vol shock
+    scales each leg's own `vol`; the hedge comparison hedges the shocked position.
     """
     scale = _SEVERITY_SCALE.get(stress_severity, 1.0)
     scenarios = _pick_pack(stress_pack, scale)
     portfolio = bool(legs)
-    if portfolio:
-        include_hedge_compare = False
 
-    def price(s: float, v: float, r: float, spot_mult: float = 1.0, vol_mult: float = 1.0) -> dict[str, Any]:
-        if not portfolio:
-            p = _run_pricing({"spot": s, "strike": strike, "rate": r, "vol": v, "maturity": maturity,
-                              "n_paths": n_paths, "dividend_yield": dividend_yield})
-            return {"mc": float(p.get("mc", 0.0)), "bs": float(p.get("bs", 0.0)),
-                    "binomial": float(p.get("binomial", 0.0))}
-        shocked_legs = []
+    def shocked(spot_mult: float, vol_mult: float) -> list[dict[str, Any]]:
+        out = []
         for leg in legs or []:
             leg = dict(leg)
             if leg.get("forward"):
                 leg["forward"] = leg["forward"] * spot_mult
             if leg.get("vol"):
                 leg["vol"] = max(1e-8, leg["vol"] * vol_mult)
-            shocked_legs.append(leg)
+            out.append(leg)
+        return out
+
+    def price(s: float, v: float, r: float, spot_mult: float = 1.0, vol_mult: float = 1.0) -> dict[str, Any]:
+        if not portfolio:
+            p = _run_pricing({"spot": s, "strike": strike, "rate": r, "vol": v, "maturity": maturity,
+                              "n_paths": n_paths, "dividend_yield": dividend_yield, "option_type": option_type})
+            return {"mc": float(p.get("mc", 0.0)), "bs": float(p.get("bs", 0.0)),
+                    "binomial": float(p.get("binomial", 0.0))}
         p = _run_multi_leg({"spot": s, "rate": r, "vol": v, "maturity": maturity,
-                            "dividend_yield": dividend_yield, "n_paths": n_paths, "legs": shocked_legs})
+                            "dividend_yield": dividend_yield, "n_paths": n_paths, "legs": shocked(spot_mult, vol_mult)})
         return {"mc": float(p.get("net_mc_price", 0.0)), "bs": float(p.get("net_bs_price", 0.0)),
-                "binomial": None}
+                "binomial": float(p.get("net_binomial_price", 0.0))}
 
     base = price(spot, vol, rate)
     base_mc = base["mc"]
@@ -181,12 +182,16 @@ def run_stress_library(
                     "transaction_cost_bps": transaction_cost_bps,
                     "rebalance_threshold": rebalance_threshold,
                     "vol_mismatch_mult": vol_mismatch_mult,
+                    "dividend_yield": dividend_yield,
+                    "option_type": option_type,
+                    **({"legs": shocked(sc.spot_mult, sc.vol_mult)} if portfolio else {}),
                 }
             )
             best = h["details"].get("best_strategy", {}) if isinstance(h["details"], dict) else {}
+            best_stats = (h["details"].get("strategy_compare") or {}).get(best.get("name"), {})
             hedge_metrics = {
                 "normalized_std": h["summary"].get("normalized_std"),
-                "var95": best.get("es95"),
+                "var95": best_stats.get("var95"),
                 "es95": best.get("es95"),
                 "best_strategy": best.get("name"),
                 "best_reason": best.get("reason"),

@@ -240,7 +240,6 @@ bool is_iron_condor(const std::vector<LegSpec>& legs) {
 
 MultiLegResult run_multi_leg(const MultiLegParams& p) {
     const double r_eff = p.rate - p.dividend_yield;
-    const int steps = std::max(10, static_cast<int>(p.maturity * 250.0));
 
     MultiLegResult r;
     for (const auto& leg : p.legs) {
@@ -261,6 +260,7 @@ MultiLegResult run_multi_leg(const MultiLegParams& p) {
         const double q_disc = std::exp(-p.dividend_yield * t);
         lr.bs_price    = q_disc * bs_closed_form_price(s, leg.strike, r_eff, vol, t, is_call);
         lr.mc_price    = q_disc * mc_price_full(s, leg.strike, r_eff, vol, t, p.n_paths, is_call);
+        lr.binomial_price = q_disc * binomial_price(s, leg.strike, r_eff, vol, t, std::max(10, static_cast<int>(t * 250.0)), is_call);
 
         double delta = 0.0, gamma = 0.0, theta = 0.0, vega = 0.0, rho = 0.0;
         pricing_greeks(s, leg.strike, p.rate, vol, t, p.dividend_yield,
@@ -274,6 +274,7 @@ MultiLegResult run_multi_leg(const MultiLegParams& p) {
 
         r.net_bs_price += leg.quantity * lr.bs_price;
         r.net_mc_price += leg.quantity * lr.mc_price;
+        r.net_binomial_price += leg.quantity * lr.binomial_price;
         r.net_delta    += leg.quantity * lr.delta_bs;
         r.net_vega     += leg.quantity * lr.vega_bs;
         r.legs.push_back(lr);

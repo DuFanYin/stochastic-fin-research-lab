@@ -50,19 +50,17 @@ function Params() {
 
 async function run() {
   const p = params.value, b = P.base(p);
-  const stress = { spot: b.spot, strike: b.strike, rate: b.rate, vol: b.vol, maturity: b.maturity, n_paths: b.n_paths,
-    dividend_yield: b.dividend_yield, stress_pack: p.stressPack, stress_severity: p.stressSeverity };
+  const contract = { spot: b.spot, strike: b.strike, rate: b.rate, vol: b.vol, maturity: b.maturity, dividend_yield: b.dividend_yield };
+  const hedge = P.hedge(p);
   let pos;
   begin(ID, ["stress", "hedge"]);
   try { pos = P.position(p.stressLegs); } catch (err) { fail(ID, "stress", err.message); return put(ID, "hedge", { skipped: "the portfolio JSON is invalid" }); }
-  if (pos) {  // a portfolio: the hedging engine covers single options only
-    put(ID, "hedge", { skipped: `Portfolio${pos.label ? ` (${pos.label})` : ""}: ${pos.legs.length} legs. The delta-hedge comparison covers single options only; clear the portfolio box to hedge the option.` });
-    await fill(ID, "stress", post("/tool/stress/run", { ...stress, spot: pos.spot ?? b.spot, rate: pos.rate ?? b.rate, include_hedge_compare: false, legs: pos.legs }));
-    return;
-  }
+  // A portfolio is stressed and hedged as a whole; otherwise the single option (Market and Option).
+  const what = pos ? { spot: pos.spot ?? b.spot, rate: pos.rate ?? b.rate, legs: pos.legs } : { option_type: b.option_type };
   await Promise.all([
-    fill(ID, "stress", post("/tool/stress/run", { ...stress, hedge_paths: p.hedgePaths, include_hedge_compare: p.stressIncludeHedge, ...P.hedge(p) })),
-    fill(ID, "hedge", post("/tool/hedging/run", { ...b, n_paths: p.hedgePaths, ...P.hedge(p) })),
+    fill(ID, "stress", post("/tool/stress/run", { ...contract, ...what, ...hedge, n_paths: b.n_paths, hedge_paths: p.hedgePaths,
+      stress_pack: p.stressPack, stress_severity: p.stressSeverity, include_hedge_compare: p.stressIncludeHedge })),
+    fill(ID, "hedge", post("/tool/hedging/run", { ...contract, ...what, ...hedge, n_paths: p.hedgePaths })),
   ]);
 }
 
@@ -111,7 +109,7 @@ function Hedge({ data }) {
         ["Normalised std", s.normalized_std], ["q05 · q50 · q95", `${fmt(s.pnl_q05)} · ${fmt(s.pnl_q50)} · ${fmt(s.pnl_q95)}`], ["Tail skew", s.tail_skew_proxy]]} />
       <Histogram edges={d.histogram?.edges} counts={d.histogram?.counts} xLabel="hedged P&L"
         marks={[{ x: s.pnl_q05, label: "q05" }, { x: s.pnl_q50, label: "med" }, { x: s.pnl_q95, label: "q95" }]}
-        caption={`Delta-hedge P&L over ${s.n_paths ?? "?"} paths, ${s.n_rebalances ?? "?"} rebalances`} />
+        caption={`P&L of ${s.n_legs > 1 ? `the ${s.n_legs}-leg position` : "one option sold"} at its Black-Scholes value, delta-hedged: ${s.n_paths ?? "?"} paths, ${s.n_rebalances ?? "?"} rebalances`} />
       {cmp.length > 0 && (
         <>
           <Sub>Strategies · cost {fmt(cfg.transaction_cost_bps)} bps · threshold {fmt(cfg.rebalance_threshold)} · vol ×{fmt(cfg.vol_mismatch_mult)}</Sub>
@@ -133,6 +131,6 @@ const Results = () => (
   </>
 );
 
-const about = "Stress an option or a portfolio through a library of market shocks and see what drives the losses. Compare four delta-hedging strategies on the same simulated paths, with the frontier of hedging cost against tail risk.";
+const about = "Stress an option or a portfolio through a library of market shocks and see what drives the losses. Delta-hedge it four ways on the same simulated paths and see the frontier of hedging cost against tail risk.";
 
 export default { id: ID, label: "Risk", about, Params, Results, run, precheck: true };

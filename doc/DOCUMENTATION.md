@@ -57,11 +57,13 @@ server/
   quantlab/
     __init__.py           the Python API: quantlab.<tool>(...), call, acall, list_tools, describe
     version.py            the package version and CONTRACT_VERSION
+    settings.py           where the lab keeps its files ($QUANT_LAB_HOME) and the deployment's config.json
     tools/                the registry: base.py (Tool, Result, the envelope), one module per area, __init__.py (TOOLS, call)
     http.py, api/         the FastAPI app: a route per tool, /api/tools, /mcp, /llms.txt, the page's data endpoints, the page
     mcp.py, cli.py, llms.py   MCP (stdio and HTTP), the command line, llms.txt
     schemas/              request models
-    services/             engine client, market data, stress library, Explainable QA, analytics
+    services/             engine client, market data, IV surface diagnostics, run history, stress library, Explainable QA,
+                          analytics
     fixtures/             recorded Deribit chains, the offline fallback, and the script that records them
 ```
 
@@ -95,7 +97,8 @@ needs runtime I/O.
 
 **Determinism.** Parallel results do not depend on the thread count. LSM splits paths into fixed 1024-path chunks, each with its
 own RNG stream and partial sums, combined in chunk order. The screener keeps a bounded top-N and breaks ties by a sequence
-number. The benchmark in [`bench/concurrency/`](../bench/concurrency/README.md) checks bit-identical prices across
+number. Delta hedging draws its paths in fixed 64-path chunks, each with its own random stream. The benchmark in
+[`bench/concurrency/`](../bench/concurrency/README.md) checks bit-identical prices across
 executors and thread counts, and explains why the engine parallelises with OpenMP rather than a thread pool.
 
 ## 3. Capabilities
@@ -126,7 +129,8 @@ spread CV). **Grid**: the server builds a symmetric spot × vol shock grid aroun
 Any number of legs (call or put, any strike, signed quantity). Each leg may carry its own `vol`, `maturity` and `forward`; a leg with
 a forward is priced with Black-76. The legs editor also accepts `{spot, rate, legs}` to override the global spot and rate. The
 strategy type is detected: straddle, strangle, bull call spread, bear put spread, butterfly, condor, iron condor, reverse iron
-condor, calendar, or custom. The result has per-leg prices and net Greeks.
+condor, calendar, or custom. The result has per-leg prices (Black-Scholes, Monte Carlo and a binomial tree of 250 steps a
+year) and net Greeks.
 
 ### Calibration
 
@@ -145,22 +149,44 @@ Any of the five Greeks over a configurable spot × maturity grid, computed in pa
 
 ### Scenarios and stress
 
-- **Scenario sweep**: base, ±10% spot, +5% vol, +1% rate, with tornado-chart data.
+- **Scenario sweep**: base, ±10% spot, +5 vol points, +1 rate point, with tornado-chart data. It prices the European call or put
+  with Black-Scholes, dividends included; an American request gets a warning, since early exercise is left out.
 - **Stress library**: four packs (Core 4, Vol First, Rates First, Crash Kit) of three or four scenarios each, at three severities
   (mild 0.7×, moderate 1.0×, severe 1.5×). Each scenario re-prices with Black-Scholes, Monte Carlo and binomial, optionally runs the hedge comparison, and
   splits P&L into spot, vol and rate. A cross-scenario summary gives a robustness score, the key driver (variance decomposition
   of the attribution), the worst scenario, how many scenarios breach 5% of spot, hedge resilience and a severity ranking. Packs are
   defined in `server/quantlab/services/stress_packs.json`; the frontend reads them from `GET /api/tool/stress/packs`, so a new pack needs
   no frontend change.
-- **Portfolio stress**: when the request carries `legs`, every scenario re-prices the whole position. Spot shocks also move each
-  leg's forward, and vol shocks apply to each leg's own vol.
+- **Portfolio stress**: when the request carries `legs`, every scenario re-prices the whole position, the binomial tree included,
+  and hedges it (the delta-hedging comparison below, on the shocked position). Spot shocks also move each leg's forward, and vol
+  shocks apply to each leg's own vol.
 
 ### Delta hedging
 
-Four strategies on shared paths, so the comparison is fair: discrete delta, discrete delta with transaction costs, threshold
-rebalancing, and hedging with a mismatched vol. Each returns the P&L distribution (mean, std, q05/q50/q95, VaR95, ES95), turnover,
-transaction cost and a 40-bin histogram; the best strategy is chosen by ES95. The frontend adds the efficiency frontier: every
-strategy in (transaction cost, ES95) space, the Pareto-optimal ones highlighted.
+What is hedged is a position:
+- one option sold at the strike, a call or a put: a market maker's hedge, and the default;
+- or any legs, held as given: positive quantities bought, negative ones sold. Each leg may have its own vol, maturity and
+  forward.
+
+The position is taken at its Black-Scholes value. The underlying is simulated as a geometric Brownian motion over the longest
+leg, and the hedge holds minus the position's delta, rebalanced at fixed steps. Each leg settles in cash at its own expiry, so
+calendars work.
+
+**P&L** = the payoffs + the hedge − what the position cost. Transaction costs therefore lower it, and a position bought above the
+vol the market then moves with loses the difference. VaR95 and ES95 are losses, given as positive numbers: ES95 is the mean loss of
+the worst 5% of paths.
+
+Four strategies run on the same paths, so the comparison is fair:
+- discrete delta;
+- discrete delta with transaction costs (on every trade, the first included);
+- threshold rebalancing: trade only when delta has moved by more than the threshold;
+- deltas from a mismatched vol (vol × the mismatch). The position is still bought at the market's vol, so the strategy measures
+  the hedging error alone.
+
+Each returns the P&L distribution (mean, std, q05/q50/q95, VaR95, ES95), turnover, transaction cost and a 40-bin histogram. The
+best strategy is the one with the lowest ES95. The headline numbers and the histogram are discrete delta's, on the same paths.
+The results do not depend on the thread count. The page adds the efficiency frontier: every strategy in (transaction cost, ES95)
+space, with the Pareto-optimal ones highlighted.
 
 ### Numerics
 
@@ -240,8 +266,15 @@ pricing or to Risk with one click.
 | Binance futures | perpetual funding rate → annualised drift | 0.01% per 8 h |
 | US Treasury daily yield curve (XML) | 1M–2Y rates | fixed curve, 4.3–4.7% |
 
-All fetches are asynchronous and concurrent; a failed source degrades to its fallback and the rest continue. The Treasury curve is
-cached for an hour. The HTTP clients are made on first use in the running event loop (another loop, such as the CLI's or a
+All fetches are asynchronous and concurrent; a failed source degrades to its fallback and the rest continue.
+
+**The Treasury curve.** The Treasury's site takes about 18 seconds to answer, and its data changes once a day. So the curve is
+fetched in the background when the server starts, and is kept in memory and in `$QUANT_LAB_HOME/rates.json`:
+- a curve less than an hour old is used as it is;
+- a curve less than a day old is used at once while a fresh one is fetched in the background;
+- only when there is none younger than a day does a request wait for the site, at most 25 seconds, before the fixed fallback.
+
+`market_snapshot` says the curve's date (`rate_curve_as_of`) and where it came from, and warns when it is the fallback. The HTTP clients are made on first use in the running event loop (another loop, such as the CLI's or a
 test's, gets its own) and closed when the server stops.
 
 **Option chain.** Two batched requests per currency (`get_instruments` and `get_book_summary_by_currency`).
@@ -293,6 +326,10 @@ Every tool has its own route, and two routes cover them all:
 | `GET  /api/tool/screener/chain` | `option_chain` | normalised chain, by currency, maximum days and snapshot, with its quality |
 | `GET  /api/tool/screener/snapshots` | `chain_snapshots` | cached chain snapshots |
 | `POST /api/tool/screener/run` | `screen_strategies` | screener on a live chain (`currency`) or a snapshot (`snapshot_id`) |
+| `POST /api/market/iv/diagnostics` | `iv_surface` | the IV surface: term structure, smiles, interpolated IV, skew, curvature, burst zones |
+| `GET  /api/runs` | `list_runs` | recent runs (not on a public server) |
+| `GET  /api/runs/compare` | `compare_runs` | what differs between two runs |
+| `GET  /api/runs/{run_id}` | `get_run` | a run by its id; `rerun=true` runs it again and lists what changed |
 | `POST /api/tool/stats/run` | `normal_moments` | normal-distribution checks |
 | `POST /api/tool/ito/run` | `ito_check` | Itô checks |
 | `POST /api/tool/simulation/run` | `simulate_path` | GBM or Vasicek paths |
@@ -306,11 +343,11 @@ The page also uses data endpoints of its own, which return plain JSON rather tha
 |---|---|
 | `GET  /api/market/spot`, `/dvol`, `/funding`, `/rates` | one source each |
 | `GET  /api/market/surface` | IV surface from the option chain |
-| `POST /api/market/iv/diagnostics` | heatmap, burst zones, skew, curvature |
 | `POST /api/market/resolve` | strike and maturity → vol and rate |
 
 Then there are:
 - `POST /api/v1/task/run`, any engine task by `task_type`, answered with the engine's own response;
+- `DELETE /api/runs/{run_id}`, which removes a run from the history (not on a public server);
 - `GET /api/health`, which reports the version, the contract version and whether the engine loaded;
 - `/mcp` (§7);
 - `/llms.txt`.
@@ -348,7 +385,15 @@ the mode does.
 
 **Run.** The page has one Run button: at the top right of the results on a wide screen, under the inputs on a narrow one; ⌘↵ or
 Ctrl+Enter does the same. On the public lab the results header also shows how much computing time is left (§8). A card shows
-the warnings of its result under it.
+the warnings of its result under it, and its run id in the header (click to copy it).
+
+**History.** Every Run is kept in this browser, up to 100. The History button at the bottom right lists them with their time,
+mode, a few inputs and a headline number:
+- clicking one loads its results back; the cards are fetched from the server by their run ids, and the header says they come
+  from the history;
+- ticking two and choosing Compare lists, card by card, every input and number that differs, with the change.
+
+The browser keeps only the run ids (`lib/history.js`); the results stay on the server (§7).
 
 **Windows.** Inputs too big for the sidebar open in a window from their summary:
 - the legs of a position (Multi-Leg, Risk's portfolio), as a table with starting strategies (straddle, strangle, bull call
@@ -401,8 +446,9 @@ Every computation is declared once, as a tool, in `server/quantlab/tools/`. A to
 - the function that computes it, and its HTTP route;
 - an example call.
 
-There are 26 tools. Everything an agent can reach is generated from this one list, so a new tool appears everywhere at once
-and the interfaces never disagree.
+There are 30 tools (29 on a public server). Everything an agent can reach is generated from this one list, so a new tool
+appears everywhere at once and the interfaces never disagree. An argument a tool does not know is an error, so a misspelt name
+is never silently ignored.
 
 ### Five ways in
 
@@ -419,6 +465,22 @@ and the interfaces never disagree.
 - **Command line.** `quantlab list`, `quantlab describe <tool>`, and `quantlab <tool> --spot 100 ...`. Values are read as JSON
   when they can be, so lists and objects work. `--input` takes a JSON file, or `-` for stdin.
 - **llms.txt.** `/llms.txt` describes the lab, its units and every tool, with an example of each, for models that read the web.
+
+### Run history
+
+Every computation's result is kept on the server, in SQLite at `$QUANT_LAB_HOME/runs.db` (compressed, by run id), so it can be
+looked up, cited, run again and compared:
+- `get_run` returns a run; with `rerun` it runs the same tool on the same inputs and lists what changed. Simulations are seeded,
+  so they repeat; live market data may have moved.
+- `compare_runs` lists every input and result number that differs between two runs.
+- `list_runs` lists the latest runs.
+
+Lookups (`option_chain`, `chain_snapshots`, `market_snapshot`, `stress_packs`) and the history's own tools are not kept. By
+default 20,000 runs are kept, for 90 days at most.
+
+A deployment can set `$QUANT_LAB_HOME/config.json`, for example `{"public": true, "runs": {"max_runs": 5000, "max_days": 7}}`.
+`public` turns off listing and deleting: on a public server a run is found only by its id, a random UUID, so no visitor sees
+another's runs.
 
 ### The package
 
@@ -465,7 +527,8 @@ keeps one visitor from crowding out the others. Per address (an IPv6 address by 
 | Request body | 256 KB |
 | Heavy parameters | paths 200,000 (LSM 50,000); steps 20,000 (Itô and measure 200,000); samples 1,000,000; rebalances and optimiser iterations 1,000; batches 50 jobs; 60 s per request |
 
-The same limits hold for the API and for MCP at `https://dufanyin.dev/lab/mcp`; the parameter caps apply inside an MCP call's
+The public copy keeps runs for 7 days and does not list them (`config.json`, §7). The same limits hold for the API and for MCP at
+`https://dufanyin.dev/lab/mcp`; the parameter caps apply inside an MCP call's
 arguments too. The `x-lab-budget` response header carries the seconds left, which the page shows. A refusal (429) says when to
 come back (`Retry-After`). The public copy runs on four cores and 2 GB. Run the lab yourself for no limits.
 
@@ -506,10 +569,11 @@ Rules that keep old callers working:
 | `tests/test_market_chain.py` | chain normalisation, caching, fallbacks (offline; `QUANT_LAB_LIVE=1` adds a live delta comparison) | 12 |
 | `tests/test_agent_toolkit.py` | every tool documented (every field described) and its example runs offline in the envelope; errors; the engine's contract; the Python API; HTTP (`/api/tools`, a route per tool, `/llms.txt`); MCP in-process and over stateless HTTP; list cutting; the CLI | 10 |
 | `tests/test_evals.py` | the agent tasks' truths and checks, and the runner's tool loop against a scripted model | 3 |
+| `tests/test_hedging_and_history.py` | hedging: a fair option hedges to zero and costs lose, thread independence, positions (sold, held, puts, calendars, rich vol); portfolio stress; the scenario sweep against pricing; the run history (kept, rerun, compared, deleted, pruned, public); the Treasury curve's cache and fallback | 10 |
 | `tests/reference/test_qf205_reference.py` | lattices and finite differences against the QF-205 Python package | 3 |
 
 `server/.venv/bin/pip install -r server/requirements-dev.txt`, then `server/.venv/bin/python -m pytest tests`, runs them
-all (71 offline). The reference test needs QF-205 and numpy. It looks for QF-205 at
+all (81 offline). `tests/conftest.py` gives every test session its own `QUANT_LAB_HOME`, so tests never touch the user's. The reference test needs QF-205 and numpy. It looks for QF-205 at
 `../QF-205/src`, or wherever `QF205_SRC` points, and is skipped when it cannot be imported.
 
 Results recorded when these methods were added:

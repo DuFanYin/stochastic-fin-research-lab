@@ -1,10 +1,10 @@
 """Every tool of the lab, by name, in the order they are listed to agents."""
 
-from quantlab.tools import calibration, greeks, hedging, market, pricing, screener, strategy, stress, theory
+from quantlab.tools import calibration, greeks, hedging, market, pricing, runs, screener, strategy, stress, theory
 from quantlab.tools.base import Result, Tool, ToolError, run_tool
 
 TOOLS: dict[str, Tool] = {t.name: t for module in (pricing, strategy, greeks, calibration, stress, hedging, market,
-                                                    screener, theory) for t in module.TOOLS}
+                                                    screener, theory, runs) for t in module.TOOLS}
 
 
 async def call(name: str, arguments: dict | None = None) -> dict:
