@@ -19,7 +19,8 @@ function loadPacks() {
   if (packsLoaded) return;
   packsLoaded = true;
   get("/tool/stress/packs").then((d) => {
-    if (Array.isArray(d.packs) && d.packs.length) packs.value = d.packs.map((p) => [p.id, p.name, p.description]);
+    const list = d.result_summary?.packs;
+    if (Array.isArray(list) && list.length) packs.value = list.map((p) => [p.id, p.name, p.description]);
   }).catch(() => { packsLoaded = false; });
 }
 

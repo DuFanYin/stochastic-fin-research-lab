@@ -2,6 +2,7 @@
 // No JSON parsing/assembly logic in this file.
 
 #include "c_api.h"
+#include "../contracts/contracts.h"
 
 #include <chrono>
 #include <cstring>
@@ -159,6 +160,10 @@ int sf_run_heston_price_json(const char* request_json, char* out_response_json, 
 int sf_run_screener_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written) {
     if (!request_json) return 2;
     return copy_response_to_buffer(sf::run_screener_json(request_json, now_ms()), out_response_json, out_capacity, out_written);
+}
+
+const char* sf_contract_version(void) {
+    return sf::kContractVersion;
 }
 
 void sf_set_num_threads(int n_threads) {

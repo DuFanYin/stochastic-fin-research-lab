@@ -63,3 +63,9 @@ target_include_directories(sf_engine_c
 )
 
 target_link_libraries(sf_engine_c PRIVATE OpenMP::OpenMP_CXX)
+
+# ── pip install (scikit-build-core, ../pyproject.toml): the library and the built workbench go into the package ──
+if(SKBUILD)
+    install(TARGETS sf_engine_c LIBRARY DESTINATION quantlab/_engine)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../static/ DESTINATION quantlab/static)
+endif()

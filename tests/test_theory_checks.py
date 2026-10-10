@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "server"))
 from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
-from src.services.engine_client import ito_check, stats_normal  # noqa: E402
+from quantlab.services.engine_client import ito_check, stats_normal  # noqa: E402
 
 
 def test_stats_are_sampled_and_converge():

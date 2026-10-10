@@ -27,7 +27,8 @@ int sf_run_heston_calibrate_json(const char* request_json, char* out_response_js
 int sf_run_heston_price_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
 int sf_run_screener_json(const char* request_json, char* out_response_json, int out_capacity, int* out_written);
 
-// ── Thread control ────────────────────────────────────────────────────────────
+// ── Version and thread control ────────────────────────────────────────────────
+const char* sf_contract_version(void);   // kContractVersion: the shape of every response
 void sf_set_num_threads(int n_threads);
 int  sf_get_max_threads(void);
 

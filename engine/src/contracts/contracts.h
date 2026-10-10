@@ -9,11 +9,15 @@ namespace sf {
 // ── Unified task response envelope ───────────────────────────────────────────
 // Returned by ResponseAssembler, serialized to JSON by json_codec.
 
+// The version of every response's shape. Bump it when a response changes; the server checks it on load
+// (sf_contract_version) and reports a stale build instead of misreading it.
+inline constexpr const char* kContractVersion = "2.0";
+
 enum class TaskStatus { Ok, Error };
 enum class GateDecision { Go, Warn, Block };
 
 struct TaskResponse {
-    std::string   contract_version = "v1";
+    std::string   contract_version = kContractVersion;
     std::string   trace_id;
     TaskStatus    status     = TaskStatus::Ok;
     GateDecision  decision   = GateDecision::Go;
@@ -254,7 +258,7 @@ struct GreekSurfaceResult {
     double strike     = 0.0;
     double vol        = 0.0;
     double rate       = 0.0;
-    std::string contract_version = "v1";
+    std::string contract_version = kContractVersion;
     std::string trace_id;
     double runtime_ms = 0.0;
 };

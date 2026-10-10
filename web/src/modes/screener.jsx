@@ -18,7 +18,7 @@ const snapshots = signal([]);
 export async function loadSnapshots() {
   try {
     const d = await get(`/tool/screener/snapshots?currency=${params.value.scrCurrency}`);
-    snapshots.value = (d.snapshots || []).map((s) => {
+    snapshots.value = (d.result_summary?.snapshots || []).map((s) => {
       const m = /_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(s.snapshot_id);
       return [s.snapshot_id, m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} UTC` : s.snapshot_id];
     });
@@ -87,7 +87,8 @@ function Params() {
           <Group title="Model and ranking">
             <Seg k="scrModelVol" label="Model vol (edge = model value − cost)" options={[["mark", "Mark"], ["dvol", "DVOL"], ["surface", "Surface"],
               ["heston", "Heston"], ["none", "None"]]} />
-            {p.scrModelVol === "heston" && (
+            {p.scrModelVol === "heston" && <Toggle k="scrHestonFit" label="Calibrate Heston to the chain" wide />}
+            {p.scrModelVol === "heston" && !p.scrHestonFit && (
               <>
                 <Num k="scrHestonV0" label="v₀" step="0.01" /><Num k="scrHestonKappa" label="κ" step="0.1" />
                 <Num k="scrHestonTheta" label="θ" step="0.01" /><Num k="scrHestonXi" label="ξ" step="0.05" />
@@ -171,7 +172,9 @@ function Strategies({ data }) {
       <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <Kv cols={1} rows={[["Data", source(s)], ["Spot (index)", usd(s.spot)], ["Rate", s.rate],
           ["Model vol", s.model_vol_requested === s.model_vol ? s.model_vol : `${s.model_vol_requested} → ${s.model_vol}`],
-          ["Prices", s.price_mode], ["Ranked by", `${s.rank_key} ${s.rank_descending ? "↓" : "↑"}`]]} />
+          ["Prices", s.price_mode], ["Ranked by", `${s.rank_key} ${s.rank_descending ? "↓" : "↑"}`],
+          s.heston_calibrated && ["Heston (fitted)", `κ ${fixed(s.heston_calibrated.kappa, 2)} · θ ${fixed(s.heston_calibrated.theta, 3)} · ξ ${fixed(s.heston_calibrated.xi, 2)} · ρ ${fixed(s.heston_calibrated.rho, 2)} · RMSE ${pct(s.heston_calibrated.rmse_rel, 2)}`],
+          s.chain_quality && ["Quotes", `${pct(s.chain_quality.two_sided_share, 0)} two-sided · median spread ${pct(s.chain_quality.median_spread_pct, 1)}`]]} />
         <Funnel s={s} />
       </div>
       {notes.map((n) => <Note>{n}</Note>)}

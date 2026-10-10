@@ -1,7 +1,7 @@
 """Deribit option chain (market_data.fetch_option_chain and friends).
 
 Offline by default: Deribit is replaced by an httpx.MockTransport serving the
-recorded fixtures in server/fixtures/. Set QUANT_LAB_LIVE=1 to also run the
+recorded fixtures in server/quantlab/fixtures/. Set QUANT_LAB_LIVE=1 to also run the
 live checks against Deribit (delta vs the ticker endpoint, request count).
 
 Run:  python tests/test_market_chain.py   (or pytest)
@@ -23,9 +23,9 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
-from src.services import engine_client, market_data as md  # noqa: E402
+from quantlab.services import engine_client, market_data as md  # noqa: E402
 
-FIXTURES = ROOT / "server" / "fixtures"
+FIXTURES = ROOT / "server" / "quantlab" / "fixtures"
 
 
 def raw_fixture(currency="BTC"):
@@ -61,13 +61,14 @@ class Env:
         self._tmp = tempfile.TemporaryDirectory() if self.home is None else None
         self._old_home = os.environ.get("QUANT_LAB_HOME")
         os.environ["QUANT_LAB_HOME"] = self.home or self._tmp.name
-        self._old_client = md._client
-        md._client = httpx.AsyncClient(transport=httpx.MockTransport(self.fake))
+        self._old_http = md._http
+        client = httpx.AsyncClient(transport=httpx.MockTransport(self.fake))
+        md._http = lambda slow=False: client
         md._CHAIN_MEMO.clear()
         return self
 
     def __exit__(self, *exc):
-        md._client = self._old_client
+        md._http = self._old_http
         md._CHAIN_MEMO.clear()
         if self._old_home is None:
             os.environ.pop("QUANT_LAB_HOME", None)

@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "server"))
 QF205_SRC = Path(os.environ.get("QF205_SRC", ROOT.parent / "QF-205" / "src"))
 sys.path.insert(0, str(QF205_SRC))
 
-from src.services.engine_client import run_engine_task  # noqa: E402
+from quantlab.services.engine_client import run_engine_task  # noqa: E402
 
 try:
     from option_calculator.pricing import (  # noqa: E402

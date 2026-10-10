@@ -15,8 +15,8 @@ sys.path.insert(0, str(ROOT / "server"))
 from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
-from src.services import engine_client  # noqa: E402
-from src.services.engine_client import run_engine_task  # noqa: E402
+from quantlab.services import engine_client  # noqa: E402
+from quantlab.services.engine_client import run_engine_task  # noqa: E402
 
 BASE = {"spot": 100.0, "strike": 100.0, "rate": 0.05, "vol": 0.2, "maturity": 1.0}
 

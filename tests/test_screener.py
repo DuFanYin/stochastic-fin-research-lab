@@ -13,7 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
-from src.services import engine_client  # noqa: E402
+from quantlab.services import engine_client  # noqa: E402
+from quantlab.version import CONTRACT_VERSION  # noqa: E402
 
 
 def opt(kind, strike, *, expiry="E1", years=0.25, forward=100.0, bid=1.0, ask=1.2,
@@ -328,7 +329,7 @@ def test_contract_version_and_buffer_growth():
     finally:
         engine_client._INITIAL_BUFFER = saved
     summary, rows = ok(r)
-    assert r["contract_version"] == "v1.3"
+    assert r["contract_version"] == CONTRACT_VERSION
     assert len(rows) == 200
 
 

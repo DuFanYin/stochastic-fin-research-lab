@@ -103,7 +103,7 @@ export function screener(p) {
     },
     price_mode: p.scrPriceMode, model_vol: p.scrModelVol, rank: { key: p.scrRankKey, top_n: p.scrTopN ?? 20 },
   };
-  if (p.scrModelVol === "heston") {
+  if (p.scrModelVol === "heston" && !p.scrHestonFit) {
     body.heston = { v0: p.scrHestonV0, kappa: p.scrHestonKappa, theta: p.scrHestonTheta, xi: p.scrHestonXi, rho: p.scrHestonRho };
   }
   return body;

@@ -40,7 +40,7 @@ T jv(const json& j, std::string_view k, T def) {
 json base_envelope(const std::string& trace_id, const std::string& decision = "go",
                    const std::string& severity = "info") {
     return {
-        {"contract_version", "v1"},
+        {"contract_version", kContractVersion},
         {"trace_id",         trace_id},
         {"status",           "ok"},
         {"decision",         decision},
@@ -59,14 +59,14 @@ json diag_block(double runtime_ms, const std::string& compute_path) {
     return {
         {"runtime_ms",        runtime_ms},
         {"stage_timings_ms",  {{"total", runtime_ms}}},
-        {"engine_version",    "v1"},
+        {"engine_version",    kContractVersion},
         {"compute_path",      json::array({compute_path})},
     };
 }
 
 std::string err_response(const std::string& trace_id, const std::string& message) {
     return json{
-        {"contract_version", "v1"}, {"trace_id", trace_id},
+        {"contract_version", kContractVersion}, {"trace_id", trace_id},
         {"status", "error"}, {"decision", "block"}, {"severity", "high"},
         {"result_summary", json::object()}, {"result_details", json::object()},
         {"validation", {{"checks_total",0},{"checks_failed",0},
@@ -950,7 +950,6 @@ std::string run_screener_json(const std::string& src, double t0_ms) {
     }
 
     json jj = base_envelope(ctx->trace_id);
-    jj["contract_version"] = "v1.3";
     jj["result_summary"] = {
         {"n_options_in",           r.n_options_in},
         {"n_options_after_filter", r.n_options_after_filter},

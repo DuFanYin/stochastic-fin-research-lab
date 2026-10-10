@@ -32,7 +32,7 @@ export const DEFAULTS = {
   scrDebitLo: null, scrDebitHi: null, scrCreditLo: null, scrCreditHi: null, scrLossLo: null, scrLossHi: null,
   scrRrLo: null, scrRrHi: null, scrDeltaLo: null, scrDeltaHi: null, scrIvLo: null, scrIvHi: null,
   scrEdgeLo: null, scrEdgeHi: null, scrFwdVolLo: null, scrFwdVolHi: null,
-  scrModelVol: "mark", scrHestonV0: 0.25, scrHestonKappa: 2.0, scrHestonTheta: 0.25, scrHestonXi: 0.8, scrHestonRho: -0.3,
+  scrModelVol: "mark", scrHestonFit: true, scrHestonV0: 0.25, scrHestonKappa: 2.0, scrHestonTheta: 0.25, scrHestonXi: 0.8, scrHestonRho: -0.3,
   scrPriceMode: "executable", scrRankKey: "rr", scrTopN: 20,
 };
 

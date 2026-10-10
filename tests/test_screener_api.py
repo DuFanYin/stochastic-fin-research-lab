@@ -51,7 +51,7 @@ def test_run_on_live_chain():
     s = d["result_summary"]
     assert s["source"] == "live" and s["currency"] == "BTC" and s["rate"] == 0.0 and s["multiplier"] == 1.0
     assert s["n_generated"] > 0 and s["n_returned"] == len(d["result_details"]["strategies"]) == 10
-    assert d["diagnostics"]["notes"] == []
+    assert d["warnings"] == [] and d["result_summary"]["chain_quality"]["options"] > 0
     strat = d["result_details"]["strategies"][0]
     assert strat["legs"] and all({"forward", "years", "iv", "fill_price"} <= set(l) for l in strat["legs"])
     assert d["result_details"]["expiries"]
@@ -61,13 +61,13 @@ def test_offline_falls_back_to_fixture_with_note():
     with Env(FakeDeribit(fail=True)), client() as c:
         d = c.post("/api/tool/screener/run", json=BASE).json()
     assert d["result_summary"]["source"] == "fixture"
-    assert any("fixture" in n for n in d["diagnostics"]["notes"])
+    assert any("fixture" in w for w in d["warnings"])
 
 
 def test_snapshots_and_chain():
     with Env(FakeDeribit()), client() as c:
         c.post("/api/tool/screener/run", json=BASE)                       # writes a snapshot
-        snaps = c.get("/api/tool/screener/snapshots", params={"currency": "BTC"}).json()["snapshots"]
+        snaps = c.get("/api/tool/screener/snapshots", params={"currency": "BTC"}).json()["result_summary"]["snapshots"]
         assert len(snaps) == 1
         sid = snaps[0]["snapshot_id"]
 
@@ -76,7 +76,7 @@ def test_snapshots_and_chain():
 
         assert c.post("/api/tool/screener/run", json={**BASE, "currency": "ETH", "snapshot_id": sid}).status_code == 400
         assert c.post("/api/tool/screener/run", json={**BASE, "snapshot_id": "BTC_19990101_000000"}).status_code == 404
-        assert c.get("/api/tool/screener/snapshots", params={"currency": "DOGE"}).status_code == 400
+        assert c.get("/api/tool/screener/snapshots", params={"currency": "DOGE"}).status_code == 422
 
         full = c.get("/api/tool/screener/chain", params={"currency": "btc"}).json()
         short = c.get("/api/tool/screener/chain", params={"currency": "BTC", "max_days": 7}).json()
@@ -87,10 +87,10 @@ def test_snapshots_and_chain():
 
 def test_model_vol_modes():
     with Env(FakeDeribit()), client() as c:
-        # DVOL endpoint is not served by the fake -> fallback value, flagged in notes
+        # DVOL endpoint is not served by the fake -> fallback value, flagged in warnings
         d = c.post("/api/tool/screener/run", json={**BASE, "model_vol": "dvol"}).json()
         assert d["result_summary"]["model_vol"] == "flat" and d["result_summary"]["model_vol_requested"] == "dvol"
-        assert any("fallback" in n for n in d["diagnostics"]["notes"])
+        assert any("fallback" in w for w in d["warnings"])
 
         d = c.post("/api/tool/screener/run", json={**BASE, "model_vol": "surface"}).json()
         assert all(s["model_value"] is not None for s in d["result_details"]["strategies"])
@@ -102,7 +102,11 @@ def test_model_vol_modes():
         d = c.post("/api/tool/screener/run", json={**BASE, "model_vol": "heston", "heston": heston}).json()
         assert d["result_summary"]["model_vol"] == "heston"
 
-        assert c.post("/api/tool/screener/run", json={**BASE, "model_vol": "heston"}).status_code == 422
+        # no parameters: Heston is calibrated to the chain first
+        d = c.post("/api/tool/screener/run", json={**BASE, "model_vol": "heston"}).json()
+        fit = d["result_summary"]["heston_calibrated"]
+        assert d["result_summary"]["model_vol"] == "heston" and fit["quotes"] >= 6 and fit["rmse_rel"] < 0.05
+        assert -1 <= fit["rho"] <= 1 and fit["v0"] > 0 and any("Heston calibrated" in n for n in d["diagnostics"]["notes"])
         assert c.post("/api/tool/screener/run", json={**BASE, "model_vol": "flat"}).status_code == 422
 
 

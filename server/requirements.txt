@@ -1,5 +1,7 @@
-fastapi
-uvicorn
-pydantic
-httpx
-
+# The server's dependencies, pinned (each release at least two weeks old when chosen). The package's own
+# compatible ranges are in ../pyproject.toml.
+fastapi==0.141.1
+uvicorn==0.54.0
+pydantic==2.13.5
+httpx==0.28.1
+mcp==2.2.0

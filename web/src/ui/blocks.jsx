@@ -79,14 +79,28 @@ export function Table({ cols, rows, onRow, selected, compact, maxHeight }) {
 export const Empty = ({ children = "No data" }) => <p class="text-sm text-muted">{children}</p>;
 export const Note = ({ children }) => <p class="text-xs leading-relaxed text-muted">{children}</p>;
 
-/** A result card bound to one slot of a mode's results: running, error, or `children(data)`. */
+/** The warnings of a result (an envelope, a list of them, or an object holding them), once each. */
+function warningsOf(data) {
+  if (!data || typeof data !== "object") return [];
+  if (Array.isArray(data)) return [...new Set(data.flatMap(warningsOf))];
+  if (Array.isArray(data.warnings)) return data.warnings;
+  return [...new Set(Object.values(data).flatMap((v) => (v && typeof v === "object" && Array.isArray(v.warnings) ? v.warnings : [])))];
+}
+
+/** A result card bound to one slot of a mode's results: running, error, or `children(data)` and its warnings. */
 export function Slot({ mode, slot, title, wide, meta, children }) {
   const s = results.value[mode]?.[slot];
   if (!s) return null;
   const engine = s.data?.diagnostics?.compute_ms ?? s.data?.diagnostics?.runtime_ms;
+  const warnings = s.state === "ok" ? warningsOf(s.data) : [];
   return (
-    <Card title={title} wide={wide} meta={meta ?? (s.state === "ok" && engine != null ? <span title="engine time">{ms(engine)}</span> : null)}>
+    <Card title={title} wide={wide} meta={meta ?? (s.state === "ok" && engine != null ? <span title="compute time">{ms(engine)}</span> : null)}>
       {s.state === "running" ? <Running /> : s.state === "error" ? <ErrorText>{s.error}</ErrorText> : children(s.data)}
+      {warnings.length > 0 && (
+        <ul class="m-0 flex list-none flex-col gap-1 rounded-sm bg-warn-soft px-2.5 py-2 text-xs text-warn">
+          {warnings.map((w) => <li>⚠ {w}</li>)}
+        </ul>
+      )}
     </Card>
   );
 }
