@@ -1,7 +1,8 @@
 # Quant Lab: documentation
 
-How Quant Lab is built and what each part does, as of the current `main`. Setup and a tour are in [README.md](README.md)
-([中文](README.zh-CN.md)); what is still to be built is in [ROADMAP.md](ROADMAP.md).
+How Quant Lab is built and what each part does, as of the current `main`. Setup and a tour are in [README.md](../README.md)
+([中文](../README.zh-CN.md)); connecting an agent is in [AGENT_TOOLKIT.md](AGENT_TOOLKIT.md); what is still to be built is in
+[ROADMAP.md](ROADMAP.md).
 
 1. [Architecture](#1-architecture)
 2. [C++ engine](#2-c-engine)
@@ -9,11 +10,12 @@ How Quant Lab is built and what each part does, as of the current `main`. Setup 
 4. [Market data](#4-market-data)
 5. [HTTP API](#5-http-api)
 6. [Workbench](#6-workbench)
-7. [The public lab](#7-the-public-lab)
-8. [Contracts and versioning](#8-contracts-and-versioning)
-9. [Testing and verification](#9-testing-and-verification)
-10. [Where the code came from](#10-where-the-code-came-from)
-11. [Course coverage](#11-course-coverage)
+7. [Agent toolkit](#7-agent-toolkit)
+8. [The public lab](#8-the-public-lab)
+9. [Contracts and versioning](#9-contracts-and-versioning)
+10. [Testing and verification](#10-testing-and-verification)
+11. [Where the code came from](#11-where-the-code-came-from)
+12. [Course coverage](#12-course-coverage)
 
 ---
 
@@ -22,7 +24,8 @@ How Quant Lab is built and what each part does, as of the current `main`. Setup 
 Three layers, and the split between them is permanent:
 
 - **C++ engine**: all numerical computation, including the screener's filtering, enumeration and ranking. No I/O, no business logic.
-- **Python server** (FastAPI): fetches market data, validates requests, routes them to the engine, annotates and aggregates results. Nothing numerical.
+- **Python package `quantlab`** (`server/quantlab/`): fetches market data, validates requests, runs the engine, annotates and
+  aggregates results. Nothing numerical. Its tools are offered over HTTP (FastAPI), MCP, a Python API and a CLI (§7).
 - **Browser** (one page: Preact and Tailwind, built by Vite): rendering, parameter management and workflow orchestration. No
   numerics.
 
@@ -34,15 +37,33 @@ kernel/*.cpp            numerical primitive
     → contracts.h           result struct
       → c_api.cpp + parser.cpp  C ABI symbol, JSON in / JSON out
         → engine_client.py        Python wrapper (ctypes)
-          → routes/*.py             FastAPI route
-            → request_models.py       Pydantic schema
-              → web/src/modes/*.jsx      frontend
+          → tools/*.py              the tool: a handler and its registry entry (name, description, path)
+            → request_models.py       its input: a Pydantic model, every field described
+              → web/src/modes/*.jsx      the page
 ```
+
+The registry entry is all a new tool needs to appear on every interface: its HTTP route, `/api/tools`, MCP, the Python API,
+the CLI and `llms.txt`.
 
 A change that touches only the bottom of this chain is a frontend patch; one that starts at the top is a full-stack change.
 
-Everything runs locally from `./run.sh`: no cloud service, no database, no authentication. Market data comes from public endpoints
-that need no API key. A public copy runs at [dufanyin.dev/lab](https://dufanyin.dev/lab/) (§7).
+Everything runs locally from `./run.sh` (or `pip install` and `quantlab serve`): no cloud service, no database, no
+authentication. Market data comes from public endpoints that need no API key. A public copy runs at
+[dufanyin.dev/lab](https://dufanyin.dev/lab/) (§8).
+
+```
+server/
+  main.py                 the app run.sh and the services start (quantlab.http)
+  quantlab/
+    __init__.py           the Python API: quantlab.<tool>(...), call, acall, list_tools, describe
+    version.py            the package version and CONTRACT_VERSION
+    tools/                the registry: base.py (Tool, Result, the envelope), one module per area, __init__.py (TOOLS, call)
+    http.py, api/         the FastAPI app: a route per tool, /api/tools, /mcp, /llms.txt, the page's data endpoints, the page
+    mcp.py, cli.py, llms.py   MCP (stdio and HTTP), the command line, llms.txt
+    schemas/              request models
+    services/             engine client, market data, stress library, Explainable QA, analytics
+    fixtures/             recorded Deribit chains, the offline fallback, and the script that records them
+```
 
 ## 2. C++ engine
 
@@ -62,7 +83,8 @@ C++23, built with CMake into a static library `libsf_engine.a` and a shared libr
 **C ABI.** Each `sf_run_*_json` symbol takes a JSON request and writes a JSON response into a caller-owned buffer:
 `pricing`, `pricing_batch`, `pricing_batch_grid`, `multi_leg`, `scenario`, `hedging`, `greek_surface`, `pde`, `stats`, `ito`,
 `simulation`, `measure_density`, `measure_compare`, `validation`, `vol_surface`, `implied_vol`, `implied_vol_batch`,
-`heston_price`, `heston_calibrate`, `screener`. `sf_set_num_threads` / `sf_get_max_threads` control the OpenMP team. When the
+`heston_price`, `heston_calibrate`, `screener`. `sf_set_num_threads` / `sf_get_max_threads` control the OpenMP team, and
+`sf_contract_version` returns `kContractVersion` (§9). When the
 buffer is too small the engine reports the size it needs, and `engine_client.py` retries with that size plus headroom, up to three
 times.
 
@@ -73,7 +95,7 @@ needs runtime I/O.
 
 **Determinism.** Parallel results do not depend on the thread count. LSM splits paths into fixed 1024-path chunks, each with its
 own RNG stream and partial sums, combined in chunk order. The screener keeps a bounded top-N and breaks ties by a sequence
-number. The benchmark in [`bench/concurrency/`](bench/concurrency/README.md) checks bit-identical prices across
+number. The benchmark in [`bench/concurrency/`](../bench/concurrency/README.md) checks bit-identical prices across
 executors and thread counts, and explains why the engine parallelises with OpenMP rather than a thread pool.
 
 ## 3. Capabilities
@@ -114,6 +136,8 @@ condor, calendar, or custom. The result has per-leg prices and net Greeks.
 - **Heston calibration**: bounded five-parameter Nelder-Mead minimising RMSE against market prices (RMSE 0.0001 on a flat
   Black-Scholes smile). The fit is graded by the RMSE as a share of the average quote (`rmse_rel`): good under 2%, fair under 5%,
   so the grade reads the same for a 10-dollar equity option and a 6,000-dollar BTC option.
+  A parameter that ends at a bound of the calibration comes with a warning: a good fit does not mean the quotes pinned it
+  down (short-dated BTC smiles often leave κ, ξ or ρ loose).
 
 ### Greek surfaces
 
@@ -126,7 +150,7 @@ Any of the five Greeks over a configurable spot × maturity grid, computed in pa
   (mild 0.7×, moderate 1.0×, severe 1.5×). Each scenario re-prices with Black-Scholes, Monte Carlo and binomial, optionally runs the hedge comparison, and
   splits P&L into spot, vol and rate. A cross-scenario summary gives a robustness score, the key driver (variance decomposition
   of the attribution), the worst scenario, how many scenarios breach 5% of spot, hedge resilience and a severity ranking. Packs are
-  defined in `server/src/services/stress_packs.json`; the frontend reads them from `GET /api/tool/stress/packs`, so a new pack needs
+  defined in `server/quantlab/services/stress_packs.json`; the frontend reads them from `GET /api/tool/stress/packs`, so a new pack needs
   no frontend change.
 - **Portfolio stress**: when the request carries `legs`, every scenario re-prices the whole position. Spot shocks also move each
   leg's forward, and vol shocks apply to each leg's own vol.
@@ -194,8 +218,15 @@ pricing or to Risk with one click.
 - **Pricing**: OTM is judged against each expiry's forward; Greeks are computed with Black-76; cost uses executable prices (buy at
   the ask, sell at the bid), or the mid with `price_mode=mid`. The contract multiplier is configurable (default 1).
 - **Model value and edge**: `model_vol` is `mark`, `dvol`, `flat`, `surface`, `heston` or `none`; it sets the model value of each
-  strategy and `edge = model value − cost`. `dvol` is fetched by the route and passed in as `flat`; `surface` builds a sparse ATM
-  surface from the same chain; `heston` needs its parameters given explicitly.
+  strategy and `edge = model value − cost`. `dvol` is fetched by the tool and passed in as `flat`; `surface` builds a sparse ATM
+  surface from the same chain; `heston` uses the parameters given, or calibrates them to the chain first: the calls nearest the
+  money on up to four expiries between a week and a year, priced from their own implied vols, fitted by Nelder-Mead
+  (`heston_calibrated` in the summary: the parameters, the quotes used, the RMSE as a share of the average quote), with a
+  warning when a parameter ends at a bound.
+- **Chain quality**: every screen and chain carries `chain_quality` (share of two-sided quotes, median spread, marks outside
+  their own quotes, crossed quotes, share without an implied vol) and a warning for each that fails: fewer than half quoted on
+  both sides, a median spread over 10% of the mid, over 5% of marks outside their quotes, any crossed quote, over 20% without an
+  implied vol. A chain that is not live (a snapshot or the fixture) is a warning too.
 - **Speed**: about 2.04M iron condors on a full PLTR chain take about 12 ms; the original implementation took about 8 s
   (measured when the code was ported).
 
@@ -210,7 +241,8 @@ pricing or to Risk with one click.
 | US Treasury daily yield curve (XML) | 1M–2Y rates | fixed curve, 4.3–4.7% |
 
 All fetches are asynchronous and concurrent; a failed source degrades to its fallback and the rest continue. The Treasury curve is
-cached for an hour.
+cached for an hour. The HTTP clients are made on first use in the running event loop (another loop, such as the CLI's or a
+test's, gets its own) and closed when the server stops.
 
 **Option chain.** Two batched requests per currency (`get_instruments` and `get_book_summary_by_currency`).
 Normalisation:
@@ -224,55 +256,64 @@ For the chain, the default rate is Deribit's own `interest_rate`, which keeps Gr
 Spot is the Deribit index. Every expiry reports its `implied_carry` as a diagnostic.
 
 **Caching.** Chains are memoised for 60 s and written to `~/.quant-lab/chains/` (override with `QUANT_LAB_HOME`), keeping 20
-snapshots per currency. Offline, the server falls back to the newest snapshot, then to the recorded fixture in `server/fixtures/`.
-Every response says which source it used. `server/fixtures/record_deribit.py` re-records the fixtures.
+snapshots per currency. Offline, the server falls back to the newest snapshot, then to the recorded fixture in
+`server/quantlab/fixtures/` (shipped with the package). Every response says which source it used, with a warning when it is not
+live. `server/.venv/bin/python -m quantlab.fixtures.record_deribit` (from `server/`) re-records the fixtures.
 
 ## 5. HTTP API
 
-Interactive documentation is served at `/docs` (not on the public lab). Tool routes return one of two envelopes, both built in
-`server/src/api/shared.py`:
+Interactive documentation is served at `/docs` (not on the public lab). Every tool returns one envelope (§9): its numbers in
+`result_summary` and `result_details`, what makes them less trustworthy in `warnings`, and `diagnostics`, `input_params`,
+`run_id`, `created_at`, `tool`, `status` and `contract_version`. A request a tool cannot answer gets an HTTP error whose `detail`
+says what to change; invalid arguments get 422 with one entry per field.
 
-- Routes that pass the request straight to the engine (`dispatch_task()`; for example `pricing/run`, `hedging/run`,
-  `v1/task/run`) return the engine's task envelope: `contract_version`, `trace_id`, `status`, `decision`, `input_params`,
-  `result_summary`, `result_details`, `diagnostics` (compute path, timings) and the validation fields.
-- Routes that assemble their result in Python (`_record()`; for example the screener, multi-leg, calibration and Greek
-  surfaces) return `run_id`, `tool_name`, `input_params`, `result_summary`, `result_details`, `diagnostics` (engine
-  availability, threads, compute time, timestamp, notes) and `created_at`.
+Every tool has its own route, and two routes cover them all:
+- `GET /api/tools` lists every tool, with its description, cost class, route and input schema;
+- `POST /api/tools/{name}` runs one, with the arguments as a JSON object.
+
+| Route | Tool | Purpose |
+|---|---|---|
+| `POST /api/tool/pricing/run` | `price_option` | single pricing, all methods and Greeks |
+| `POST /api/tool/pricing/batch` | `price_batch` | up to 500 jobs with per-method statistics |
+| `POST /api/tool/pricing/batch/grid` | `price_grid` | server-generated spot × vol grid |
+| `POST /api/tool/scenario/run` | `scenario_sweep` | five-scenario sweep (a European call, Black-Scholes) |
+| `POST /api/tool/pde/run` | `pde_price` | finite-difference pricing |
+| `POST /api/tool/convergence/run` | `lattice_convergence` | binomial and trinomial convergence |
+| `POST /api/tool/benchmark/run` | `benchmark_methods` | cross-method benchmark |
+| `POST /api/tool/pricing/multi-leg` | `price_strategy` | multi-leg pricing, per-leg breakdown, net Greeks |
+| `POST /api/tool/greek/surface` | `greek_surface` | Greek over a spot × maturity grid |
+| `POST /api/tool/calibration/iv` | `implied_vol` | implied vol |
+| `POST /api/tool/calibration/iv/batch` | `implied_vol_batch` | batch implied vol |
+| `POST /api/tool/calibration/heston/price` | `heston_price` | Heston price |
+| `POST /api/tool/calibration/heston` | `calibrate_heston` | Heston calibration, graded by the RMSE relative to the quotes |
+| `GET  /api/tool/stress/packs` | `stress_packs` | stress pack metadata |
+| `POST /api/tool/stress/run` | `stress_test` | stress library, single option or portfolio |
+| `POST /api/tool/hedging/run` | `compare_hedges` | four-strategy hedge comparison |
+| `GET  /api/market/btc` | `market_snapshot` | full BTC snapshot: spot, DVOL, funding, rates, IV surface |
+| `GET  /api/tool/screener/chain` | `option_chain` | normalised chain, by currency, maximum days and snapshot, with its quality |
+| `GET  /api/tool/screener/snapshots` | `chain_snapshots` | cached chain snapshots |
+| `POST /api/tool/screener/run` | `screen_strategies` | screener on a live chain (`currency`) or a snapshot (`snapshot_id`) |
+| `POST /api/tool/stats/run` | `normal_moments` | normal-distribution checks |
+| `POST /api/tool/ito/run` | `ito_check` | Itô checks |
+| `POST /api/tool/simulation/run` | `simulate_path` | GBM or Vasicek paths |
+| `POST /api/tool/measure/run` | `measure_density` | Radon-Nikodym density path |
+| `POST /api/tool/measure/compare` | `measure_compare` | P vs Q comparison |
+| `POST /api/tool/validation/gate` | `validate` | validation gate with Explainable QA |
+
+The page also uses data endpoints of its own, which return plain JSON rather than the envelope:
 
 | Route | Purpose |
 |---|---|
-| `POST /api/tool/pricing/run` | single pricing, all methods and Greeks |
-| `POST /api/tool/pricing/batch` | up to 500 jobs with per-method statistics |
-| `POST /api/tool/pricing/batch/grid` | server-generated spot × vol grid |
-| `POST /api/tool/pricing/multi-leg` | multi-leg pricing, per-leg breakdown, net Greeks |
-| `POST /api/tool/scenario/run` | five-scenario sweep |
-| `POST /api/tool/stress/run` | stress library, single option or portfolio |
-| `GET  /api/tool/stress/packs` | stress pack metadata |
-| `POST /api/tool/hedging/run` | four-strategy hedge comparison |
-| `POST /api/tool/greek/surface` | Greek over a spot × maturity grid |
-| `POST /api/tool/calibration/iv` | implied vol |
-| `POST /api/tool/calibration/iv/batch` | batch implied vol |
-| `POST /api/tool/calibration/heston/price` | Heston price |
-| `POST /api/tool/calibration/heston` | Heston calibration |
-| `POST /api/tool/pde/run` | finite-difference pricing |
-| `POST /api/tool/convergence/run` | binomial and trinomial convergence |
-| `POST /api/tool/benchmark/run` | cross-method benchmark |
-| `POST /api/tool/stats/run` | normal-distribution checks |
-| `POST /api/tool/ito/run` | Itô checks |
-| `POST /api/tool/simulation/run` | GBM or Vasicek paths |
-| `POST /api/tool/measure/run` | Radon-Nikodym density path |
-| `POST /api/tool/measure/compare` | P vs Q comparison |
-| `POST /api/tool/validation/gate` | validation gate with Explainable QA |
-| `POST /api/tool/screener/run` | screener on a live chain (`currency`) or a snapshot (`snapshot_id`) |
-| `GET  /api/tool/screener/chain` | normalised chain, by currency, maximum days and snapshot |
-| `GET  /api/tool/screener/snapshots` | cached chain snapshots |
-| `GET  /api/market/btc` | full BTC snapshot: spot, DVOL, funding, rates |
 | `GET  /api/market/spot`, `/dvol`, `/funding`, `/rates` | one source each |
 | `GET  /api/market/surface` | IV surface from the option chain |
 | `POST /api/market/iv/diagnostics` | heatmap, burst zones, skew, curvature |
 | `POST /api/market/resolve` | strike and maturity → vol and rate |
-| `POST /api/v1/task/run` | generic dispatch: any engine task by `task_type` |
-| `GET  /api/health` | health check |
+
+Then there are:
+- `POST /api/v1/task/run`, any engine task by `task_type`, answered with the engine's own response;
+- `GET /api/health`, which reports the version, the contract version and whether the engine loaded;
+- `/mcp` (§7);
+- `/llms.txt`.
 
 ## 6. Workbench
 
@@ -306,7 +347,8 @@ current mode; on the right its results, as cards in one to three columns by widt
 the mode does.
 
 **Run.** The page has one Run button: at the top right of the results on a wide screen, under the inputs on a narrow one; ⌘↵ or
-Ctrl+Enter does the same. On the public lab the results header also shows how much computing time is left (§7).
+Ctrl+Enter does the same. On the public lab the results header also shows how much computing time is left (§8). A card shows
+the warnings of its result under it.
 
 **Windows.** Inputs too big for the sidebar open in a window from their summary:
 - the legs of a position (Multi-Leg, Risk's portfolio), as a table with starting strategies (straddle, strangle, bull call
@@ -345,7 +387,72 @@ Every input persists in `localStorage` ("Reset inputs" restores the defaults).
 
 Its static introduction gives crawlers the same text a visitor reads; `main.jsx` clears it before the app renders.
 
-## 7. The public lab
+## 7. Agent toolkit
+
+The lab can be used by an agent as well as by a person. [AGENT_TOOLKIT.md](AGENT_TOOLKIT.md) explains how to connect one;
+this section explains how it is built.
+
+### One list of tools
+
+Every computation is declared once, as a tool, in `server/quantlab/tools/`. A tool has:
+- a name, such as `price_option`, and a title;
+- a description written for a model: what it computes, when to use it, and what comes back;
+- an input model, in which every field says what it means, its unit and its range;
+- the function that computes it, and its HTTP route;
+- an example call.
+
+There are 26 tools. Everything an agent can reach is generated from this one list, so a new tool appears everywhere at once
+and the interfaces never disagree.
+
+### Five ways in
+
+- **HTTP.** Each tool keeps a route of its own (for example `POST /api/tool/pricing/run`). `GET /api/tools` lists all of them
+  with their schemas, and `POST /api/tools/{name}` runs any of them by name.
+- **MCP.** `quantlab/mcp.py` uses the official MCP SDK.
+  - Over HTTP it answers at `/mcp`. It runs stateless, with plain JSON replies, so every request stands on its own and works
+    through any proxy.
+  - Locally, `quantlab mcp` serves the same tools on stdin and stdout.
+  - A bad call comes back as an error result with the reason, so the agent can correct itself.
+  - Lists longer than 40 items are cut, with a note, to keep results within an agent's context.
+- **Python.** `import quantlab`, then `quantlab.price_option(spot=100, ...)`. Each tool is a function with a real signature, and
+  its description is the docstring.
+- **Command line.** `quantlab list`, `quantlab describe <tool>`, and `quantlab <tool> --spot 100 ...`. Values are read as JSON
+  when they can be, so lists and objects work. `--input` takes a JSON file, or `-` for stdin.
+- **llms.txt.** `/llms.txt` describes the lab, its units and every tool, with an example of each, for models that read the web.
+
+### The package
+
+`pip install .`, or a `pip install` from GitHub, builds the C++ engine with CMake (through scikit-build-core). It then installs
+the engine, the Python package and the built page together. Afterwards the `quantlab` and `quantlab-mcp` commands are
+available, and `quantlab serve` runs the whole lab, page included.
+
+The package looks for the engine in this order:
+1. wherever `$QUANTLAB_ENGINE` points;
+2. next to the package;
+3. in the repository's `engine/build/`.
+
+Dependencies are written down twice, on purpose:
+- `pyproject.toml` gives the versions the package works with;
+- `server/requirements.txt` pins the exact versions the lab runs with.
+
+### Evaluation
+
+`evals/tasks.py` is a set of questions an agent should be able to answer with the tools, each with an answer that can be
+checked:
+- a Black-Scholes price;
+- an implied vol;
+- an early-exercise premium;
+- the fix the validation gate suggests;
+- a Heston price;
+- the best BTC strangle on the live chain.
+
+The right answer is worked out with the tools themselves when the answer is checked.
+
+`evals/run.py` gives the questions to Claude, lets it call the tools, and checks what it says. It needs an
+`ANTHROPIC_API_KEY`. When a question fails, the fix belongs in the tool's description or error message.
+`tests/test_evals.py` keeps the questions and the runner working without a key.
+
+## 8. The public lab
 
 [dufanyin.dev/lab](https://dufanyin.dev/lab/) runs this repository for anyone. A proxy in front of it (not in this repository)
 keeps one visitor from crowding out the others. Per address (an IPv6 address by its /64) it allows:
@@ -358,19 +465,37 @@ keeps one visitor from crowding out the others. Per address (an IPv6 address by 
 | Request body | 256 KB |
 | Heavy parameters | paths 200,000 (LSM 50,000); steps 20,000 (Itô and measure 200,000); samples 1,000,000; rebalances and optimiser iterations 1,000; batches 50 jobs; 60 s per request |
 
-The `x-lab-budget` response header carries the seconds left, which the page shows. A refusal (429) says when to come back
-(`Retry-After`). The public copy runs on four cores and 2 GB. Run the lab yourself for no limits.
+The same limits hold for the API and for MCP at `https://dufanyin.dev/lab/mcp`; the parameter caps apply inside an MCP call's
+arguments too. The `x-lab-budget` response header carries the seconds left, which the page shows. A refusal (429) says when to
+come back (`Retry-After`). The public copy runs on four cores and 2 GB. Run the lab yourself for no limits.
 
-## 8. Contracts and versioning
+## 9. Contracts and versioning
 
-- Every new field in a response struct has a default, so callers that ignore unknown fields keep working.
-- New routes are additive; an existing route never changes its response shape, it only gains fields.
-- `_TASK_TO_SYMBOL` in `server/src/services/engine_client.py` is the single registry of engine capabilities; a new ABI symbol
-  must be registered there before a route can call it.
-- `contract_version`: the engine's task envelope reports `v1`; the screener's engine output reports `v1.3` (screener,
-  per-leg vol / maturity / forward, trinomial, LSM, explicit and American PDE).
+Every tool answers in the same shape, the envelope:
 
-## 9. Testing and verification
+| Field | What it holds |
+|---|---|
+| `result_summary` | the headline numbers |
+| `result_details` | tables, curves and grids |
+| `warnings` | anything that makes the numbers less trustworthy |
+| `diagnostics` | how long it took, the engine's threads, and notes on how it was computed |
+| `input_params` | the arguments as the tool understood them, defaults included |
+| `run_id`, `created_at`, `tool`, `status`, `contract_version` | which run this was |
+
+Numbers keep 12 significant digits; a value that is not finite becomes `null`.
+
+The shape has a version, now `2.0`. It is written in two places that must agree: `kContractVersion` in
+`engine/src/contracts/contracts.h` and `CONTRACT_VERSION` in `server/quantlab/version.py`. The engine reports its version
+through `sf_contract_version`. If the server finds an engine built for another version, it does not use it: `/api/health` and
+every tool say the engine needs rebuilding. Bump both when a response changes shape.
+
+Rules that keep old callers working:
+- a new field always has a default, so a caller that ignores unknown fields is unaffected;
+- tools and routes are only added; an existing one gains fields but never changes its shape;
+- a new engine function has to be registered in `_TASK_TO_SYMBOL` (`server/quantlab/services/engine_client.py`) before a tool
+  can call it.
+
+## 10. Testing and verification
 
 | Test | Checks | Count |
 |---|---|---:|
@@ -379,9 +504,12 @@ The `x-lab-budget` response header carries the seconds left, which the page show
 | `tests/test_screener.py` | filters, generators, ranking, bounded top-N, the fixed defects of the original screener | 21 |
 | `tests/test_screener_api.py` | screener routes, offline fallback, snapshots, Multi-Leg hand-off, portfolio stress | 10 |
 | `tests/test_market_chain.py` | chain normalisation, caching, fallbacks (offline; `QUANT_LAB_LIVE=1` adds a live delta comparison) | 12 |
+| `tests/test_agent_toolkit.py` | every tool documented (every field described) and its example runs offline in the envelope; errors; the engine's contract; the Python API; HTTP (`/api/tools`, a route per tool, `/llms.txt`); MCP in-process and over stateless HTTP; list cutting; the CLI | 10 |
+| `tests/test_evals.py` | the agent tasks' truths and checks, and the runner's tool loop against a scripted model | 3 |
 | `tests/reference/test_qf205_reference.py` | lattices and finite differences against the QF-205 Python package | 3 |
 
-`server/.venv/bin/python -m pytest tests` runs them all. The reference test needs QF-205 and numpy. It looks for QF-205 at
+`server/.venv/bin/pip install -r server/requirements-dev.txt`, then `server/.venv/bin/python -m pytest tests`, runs them
+all (71 offline). The reference test needs QF-205 and numpy. It looks for QF-205 at
 `../QF-205/src`, or wherever `QF205_SRC` points, and is skipped when it cannot be imported.
 
 Results recorded when these methods were added:
@@ -395,8 +523,10 @@ Results recorded when these methods were added:
   defects deliberately fixed (iron condor max gain / loss). That one-off check is no longer in the tree.
 - Every mode, the windows and the hand-offs were exercised in a real browser (Playwright), light and dark, desktop and phone
   widths, through the public lab's CSP, with no JavaScript errors.
+- The wheel was built and installed into a fresh virtual environment. There the CLI, the Python API and MCP over stdio (the
+  SDK's client starting `quantlab-mcp`) all ran tools.
 
-## 10. Where the code came from
+## 11. Where the code came from
 
 Quant Lab absorbed three earlier projects. Ported files name their source commit in the header.
 
@@ -428,7 +558,7 @@ Defects fixed during the port:
   - `pricing_bundle` ignored `steps`;
   - a late Live response could overwrite Sim inputs.
 
-## 11. Course coverage
+## 12. Course coverage
 
 Quant Lab started as an executable companion to a nine-session risk-neutral pricing course; each topic has a live, parameterised
 compute path.

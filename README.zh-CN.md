@@ -2,7 +2,7 @@
 
 # Quant Lab
 
-**在浏览器里给期权定价、校准、压力测试、对冲和筛选，C++23 引擎计算，接实时行情。**
+**给期权定价、校准、压力测试、对冲和筛选，C++23 引擎计算，接实时行情。可以在浏览器里用，也可以交给你的 AI agent 当工具。**
 
 [English](README.md) · 中文
 
@@ -15,12 +15,15 @@
 ![Preact](https://img.shields.io/badge/Preact-673AB8?logo=preact&logoColor=white)
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind-38BDF8?logo=tailwindcss&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-x86--64-FCC624?logo=linux&logoColor=black)
+[![MCP server](https://img.shields.io/badge/MCP-server-6E56CF)](doc/AGENT_TOOLKIT.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 </div>
 
-**[在线试用：dufanyin.dev/lab](https://dufanyin.dev/lab/)**。免费，不用注册，BTC 数据实时取自 Deribit。
+**[在线试用：dufanyin.dev/lab](https://dufanyin.dev/lab/)**。免费，不用注册，BTC 数据实时取自 Deribit。也可以直接交给 agent：
+`claude mcp add --transport http quantlab https://dufanyin.dev/lab/mcp`。
 
-![Risk：压力测试库、Delta 对冲损益分布和对冲效率前沿](docs/images/risk.png)
+![Risk：压力测试库、Delta 对冲损益分布和对冲效率前沿](doc/images/risk.png)
 
 ## 值得一看的地方
 
@@ -29,7 +32,9 @@
 - **实时行情，不需要 API key。** 现价、DVOL 指数、资金费率、美国国债收益率曲线和完整的 BTC / ETH 期权链都来自公开接口。
   离线时，每个数据源都会退回缓存值或固定值。
 - **快，而且结果可复现。** 数值计算用 C++23 加 OpenMP，不管用多少线程，结果都逐位相同。筛选器枚举约两百万个铁鹰组合只要约 12 毫秒。
-- **分层清楚。** 所有数值计算都在 C++ 引擎里，FastAPI 负责对外提供服务，浏览器只负责画图，每一层都可以单独读懂。
+- **也是给 agent 用的。** 26 个工具各自说明自己：算什么、输入和单位、调用示例。agent 可以通过 MCP、HTTP、Python 库或命令行使用，
+  每个结果都附带“这个数字有多可信”的提示。
+- **分层清楚。** 所有数值计算都在 C++ 引擎里，Python 负责对外提供服务，浏览器只负责画图，每一层都可以单独读懂。
 
 ## 能做什么
 
@@ -44,7 +49,31 @@
 
 | Screener（深色主题） | Pricing |
 |---|---|
-| ![筛选器按 edge 给 BTC 宽跨式排序](docs/images/screener.png) | ![Pricing：各方法并排、Greeks 和校准](docs/images/pricing.png) |
+| ![筛选器按 edge 给 BTC 宽跨式排序](doc/images/screener.png) | ![Pricing：各方法并排、Greeks 和校准](doc/images/pricing.png) |
+
+## 给 agent 用
+
+公开实例就是一个 MCP 服务器。在 Claude Code 里：
+
+```bash
+claude mcp add --transport http quantlab https://dufanyin.dev/lab/mcp
+```
+
+然后就可以问，比如“找出本月有正 edge 的最便宜的 BTC 宽跨式，再做一次压力测试”。任何 MCP 客户端都能用这个地址。
+
+在自己机器上也一样，而且没有限制：
+
+```bash
+pip install git+https://github.com/DuFanYin/stochastic-fin-research-lab   # 会编译引擎，依赖见下方“快速上手”
+claude mcp add quantlab -- quantlab mcp
+```
+
+同一组工具还有三种用法：
+- Python：`quantlab.price_option(spot=100, strike=105, rate=0.03, vol=0.2, maturity=0.5)`；
+- 命令行：`quantlab price_option --spot 100 ...`；
+- HTTP：`GET /api/tools` 列出全部工具，`POST /api/tools/<名字>` 调用其中一个。
+
+会读网页的模型可以从 [llms.txt](https://dufanyin.dev/lab/llms.txt) 开始。完整说明见 [doc/AGENT_TOOLKIT.md](doc/AGENT_TOOLKIT.md)（英文）。
 
 ## 快速上手
 
@@ -56,7 +85,14 @@ sudo apt install build-essential cmake nlohmann-json3-dev python3-venv lsof
 ./run.sh          # 以后：用已有的编译结果直接启动
 ```
 
-然后打开 <http://127.0.0.1:8000/>。用 `PORT=8001 ./run.sh` 可以换端口。API 文档在 `/docs`，健康检查在 `/api/health`。
+然后打开 <http://127.0.0.1:8000/>。用 `PORT=8001 ./run.sh` 可以换端口。API 文档在 `/docs`，健康检查在 `/api/health`，MCP 在 `/mcp`。
+
+也可以作为包安装（同样会编译引擎），然后一条命令跑起全部服务：
+
+```bash
+pip install git+https://github.com/DuFanYin/stochastic-fin-research-lab
+quantlab serve            # 页面、API 和 MCP 都在 http://127.0.0.1:8000/
+```
 
 依赖：
 - CMake ≥ 3.16；
@@ -83,26 +119,26 @@ cmake --build engine/build -j
 ```
 web/ → static/      页面：Preact + Tailwind，由 Vite 构建；负责输入、图表和流程，不做数值计算
       │  HTTP / JSON
-server/             FastAPI：取行情、校验请求、路由、标注结果；不做数值计算
+server/quantlab/    Python：取行情、各个工具，以及调用它们的方式（HTTP、MCP、Python、CLI）；不做数值计算
       │  ctypes，JSON 进 / JSON 出
 engine/             C++23 + OpenMP：所有计算，不做 I/O
 ```
 
-新功能自底向上加：内核原语 → 引擎流程 → 结果结构体 → C ABI → Python 封装 → 路由 → 请求模型 → 页面。
-[DOCUMENTATION.md](DOCUMENTATION.md) 逐层说明（英文）。
+新功能自底向上加：内核原语 → 引擎流程 → 结果结构体 → C ABI → Python 封装 → 工具 → 页面。
+[doc/DOCUMENTATION.md](doc/DOCUMENTATION.md) 逐层说明（英文）。
 
 ## 测试
 
 ```bash
-server/.venv/bin/pip install pytest
+server/.venv/bin/pip install -r server/requirements-dev.txt
 server/.venv/bin/python -m pytest tests
 ```
 
-共 58 个测试，都能离线跑，覆盖：
-- 各定价方法；
-- 理论检查；
-- 筛选器及其路由；
-- 期权链处理。
+共 71 个测试，都能离线跑，覆盖：
+- 各定价方法和理论检查；
+- 筛选器及其路由，以及期权链处理；
+- 每个工具，以及每种调用方式（HTTP、MCP、Python、CLI）；
+- agent 评测集。
 
 另有两项可选：
 - 设 `QUANT_LAB_LIVE=1` 会多一项对照 Deribit 实时数据的检查；
@@ -113,20 +149,14 @@ server/.venv/bin/python -m pytest tests
 [dufanyin.dev/lab](https://dufanyin.dev/lab/) 运行的就是这个仓库，所有人都能用。
 
 为了不让一个访客挤占其他人，每个地址有 120 秒计算时间，10 分钟回满。跑一次 Pricing 约 3 秒，其他模式都不到 1 秒，页面上会显示剩余额度。
-计算量大的参数有上限，例如 Monte Carlo 最多 200,000 条路径。
+计算量大的参数有上限，例如 Monte Carlo 最多 200,000 条路径。API 和 MCP 也受同样的限制。
 
 在自己机器上运行就没有任何限制。
 
 ## 路线图
 
-下一步是 **agent 工具库**：把整个 lab 做成 agent 可以调用的工具库，包括：
-- 一份工具注册表，每个工具的 schema 都写给模型看；
-- 一个 Python 包；
-- 一个 MCP 服务器，本地版和托管版都有；
-- 一个 CLI。
-
-每个结果都会附上单位、所用假设和验证警告，让 agent 能自己判断一个数字可不可信。之后是运行历史、组合对冲和统一的返回格式。
-详见 [ROADMAP.md](ROADMAP.md)（英文）。
+下一步是运行历史：结果可以保存、跨会话比较，agent 也能凭 run ID 引用某次结果。再往后是把包发布到 PyPI，以及对整个组合做对冲。
+详见 [doc/ROADMAP.md](doc/ROADMAP.md)（英文）。
 
 ## 目录
 
@@ -136,24 +166,28 @@ server/.venv/bin/python -m pytest tests
 | `engine/src/engine/` | 各领域的计算流程，每个领域一个文件 |
 | `engine/src/contracts/` | 结果结构体 |
 | `engine/src/api/` | JSON 解析和导出的 C ABI |
-| `server/src/api/` | FastAPI 路由 |
-| `server/src/services/` | 引擎客户端、行情、压力测试库、Explainable QA |
-| `server/src/schemas/` | 请求模型 |
-| `server/fixtures/` | 离线用的 Deribit 期权链录制数据，以及录制脚本 |
+| `server/quantlab/tools/` | 各个工具：一份注册表，每个领域一个模块 |
+| `server/quantlab/` | Python 包：HTTP 应用、MCP 服务器、CLI、`llms.txt`、Python API |
+| `server/quantlab/services/` | 引擎客户端、行情、压力测试库、Explainable QA |
+| `server/quantlab/schemas/` | 工具的输入模型，每个字段都有说明 |
+| `server/quantlab/fixtures/` | 离线用的 Deribit 期权链录制数据，以及录制脚本 |
 | `web/` | 页面源码：Preact 组件、Tailwind、SVG 图表 |
 | `static/` | 编译好的页面（`cd web && npm ci && npm run build`），在 `/` 提供 |
 | `tests/` | 测试 |
+| `evals/` | 有标准答案的 agent 任务，以及把它们交给 Claude 的运行器 |
 | `bench/concurrency/` | 独立的并发基准：在引擎的 LSM 上比较 OpenMP 和线程池，比较 SPSC 队列和加锁队列 |
-| `docs/images/` | 截图 |
+| `doc/` | 文档、路线图、agent 使用说明、截图 |
+| `pyproject.toml` | `quantlab` 包（`pip install .` 会编译引擎） |
 
 期权链快照缓存在仓库之外的 `~/.quant-lab/`，可以用 `QUANT_LAB_HOME` 改位置。
 
 ## 延伸阅读
 
-- [DOCUMENTATION.md](DOCUMENTATION.md)：架构、所有功能、行情数据、API、页面、接口约定、测试，以及代码来源。
-- [ROADMAP.md](ROADMAP.md)：已经做了什么，接下来做什么。
+- [doc/AGENT_TOOLKIT.md](doc/AGENT_TOOLKIT.md)：怎么接入 agent、有哪些工具、返回什么、评测集。
+- [doc/DOCUMENTATION.md](doc/DOCUMENTATION.md)：架构、所有功能、行情数据、API、页面、agent 工具库、接口约定、测试，以及代码来源。
+- [doc/ROADMAP.md](doc/ROADMAP.md)：已经做了什么，接下来做什么。
 - [bench/concurrency/README.md](bench/concurrency/README.md)：并发基准结果，以及引擎为什么用 OpenMP。
 
 ---
 
-作者 [Hang Zhengyang](https://dufanyin.dev/)。如果这个项目对你有用，点个 ⭐ 能让更多人看到它。
+作者 [Hang Zhengyang](https://dufanyin.dev/)，以 [MIT 许可证](LICENSE) 开源。如果这个项目对你有用，点个 ⭐ 能让更多人看到它。
